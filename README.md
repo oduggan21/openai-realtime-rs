@@ -1,6 +1,6 @@
 # (PoC) openai-realtime-rs
 
-## OpenAI Realtime API Rust Client Library (Proof of Concept)
+This repository is a Proof of Concept (PoC) project for OpenAI's RealtimeAPI, intended to support my other projects.
 
 ## Install
 
@@ -15,7 +15,6 @@ openai-realtime = { git = "https://github.com/katya4oyu/openai-realtime-rs.git" 
 
 ```bash
 cargo run --example a2a
-
 ```
 
 ## Links
