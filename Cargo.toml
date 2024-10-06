@@ -8,3 +8,16 @@ edition = "2021"
 
 [dependencies]
 openai-realtime-types = { path = "types" }
+
+
+[workspace.dependencies]
+futures = { version = "0.3" }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+dotenvy = { version = "0.15" }
+clap = { version = "4", features = ["derive", "cargo"] }
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
