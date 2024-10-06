@@ -6,15 +6,33 @@ name = "openai-realtime"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["native-tls"]
+native-tls = ["tokio-tungstenite/native-tls"]
+rustls = ["tokio-tungstenite/rustls-tls-native-roots"]
+
 [dependencies]
 openai-realtime-types = { path = "types" }
+futures = { workspace = true }
+futures-util = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true}
+secrecy = { version = "0.10", features = ["serde"]}
+
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+dotenvy = { workspace = true }
 
 
 [workspace.dependencies]
 futures = { version = "0.3" }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tokio = { version = "1", features = ["full"] }
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.24" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 dotenvy = { version = "0.15" }
