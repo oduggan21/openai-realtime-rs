@@ -1,0 +1,10 @@
+[workspace]
+members = ["types"]
+
+[package]
+name = "openai-realtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+openai-realtime-types = { path = "types" }
