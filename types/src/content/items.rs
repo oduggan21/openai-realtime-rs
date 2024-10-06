@@ -1,4 +1,4 @@
-use crate::content::message;
+use crate::content::message::MessageItem;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
@@ -10,6 +10,7 @@ pub enum Item {
     #[serde(rename = "function_call_output")]
     FunctionCallOutput(FunctionCallOutputItem),
 }
+
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ItemStatus {
@@ -30,41 +31,28 @@ pub struct _Item {
     pub status: Option<ItemStatus>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub enum MessageRole {
-    #[serde(rename = "user")]
-    User,
-    #[serde(rename = "assistant")]
-    Assistant,
-    #[serde(rename = "system")]
-    System,
+impl Default for _Item {
+    fn default() -> Self {
+        Self {
+            id: None,
+            status: None,
+        }
+    }
 }
 
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct MessageItem {
-    #[serde(flatten)]
-    item: _Item,
-
-    /// The role of the message sender: "user", "assistant", "system"
-    role: MessageRole,
-
-    /// The content of the message
-    content: Vec<message::Content>,
-}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FunctionCallItem {
     #[serde(flatten)]
     item: _Item,
     /// The ID of the function call(for "function_call" items).
-    pub call_id: Option<String>,
+    call_id: Option<String>,
 
     /// The name of the function call(for "function_call" items).
-    pub name: Option<String>,
+    name: Option<String>,
 
     /// The arguments of the function call(for "function_call" items).
-    pub arguments: Option<String>,
+    arguments: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -72,5 +60,5 @@ pub struct FunctionCallOutputItem {
     #[serde(flatten)]
     item: _Item,
     /// The output of the function call(for "function_call_output" items).
-    pub output: Option<String>,
+    output: Option<String>,
 }

@@ -130,6 +130,26 @@ impl Client {
             Err("failed to get stats".into())
         }
     }
+    
+    async fn send_client_event(&mut self, event: types::ClientEvent) -> Result<(), Box<dyn std::error::Error>> {
+        match self.c_tx {
+            Some(ref tx) => {
+                tx.send(event).await?;
+                Ok(())
+            }
+            None => Err("not connected yet".into()),
+        }
+    }
+    
+    pub async fn create_conversation_item(&mut self, item: types::Item) -> Result<(), Box<dyn std::error::Error>> {
+        let event = types::ClientEvent::ConversationItemCreate(types::events::client::ConversationItemCreateEvent::new(item));
+        self.send_client_event(event).await
+    }
+    
+    pub async fn create_response(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let event = types::ClientEvent::ResponseCreate(types::events::client::ResponseCreateEvent::new());
+        self.send_client_event(event).await
+    }
 }
 
 pub async fn connect_with_config(config: config::Config) -> Result<Client, Box<dyn std::error::Error>> {
