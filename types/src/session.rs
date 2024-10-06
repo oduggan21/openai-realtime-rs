@@ -38,6 +38,9 @@ pub struct Session {
     /// Maximum number of output tokens. Use "inf" for infinity.
     /// "inf" or number
     max_output_tokens: Option<MaxOutputTokens>,
+    
+    /// The time in seconds when the session will expire.
+    expires_at: Option<i32>,
 }
 
 impl Session {}
@@ -70,6 +73,7 @@ impl SessionConfigurator {
                 tool_choice: Some(ToolChoice::Auto),
                 temperature: 0.0,
                 max_output_tokens: None,
+                expires_at: None,
             }
         }
     }

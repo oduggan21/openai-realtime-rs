@@ -177,7 +177,7 @@ pub struct ConversationItemCreatedEvent {
     /// The ID of the preceding item
     previous_item_id: Option<String>,
     /// The item that was created
-    item_id: String,
+    item: ItemResource,
 }
 
 impl ConversationItemCreatedEvent {
@@ -189,8 +189,8 @@ impl ConversationItemCreatedEvent {
         self.previous_item_id.as_deref()
     }
 
-    pub fn item_id(&self) -> &str {
-        &self.item_id
+    pub fn item(&self) -> ItemResource {
+        self.item.clone()
     }
 }
 

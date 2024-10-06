@@ -38,7 +38,6 @@ pub enum ServerEvent {
     SessionUpdated(SessionUpdatedEvent),
     #[serde(rename = "conversation.created")]
     ConversationCreated(ConversationCreatedEvent),
-    
     #[serde(rename = "input_audio_buffer.commited")]
     InputAudioBufferCommitted(InputAudioBufferCommitedEvent),
     #[serde(rename = "input_audio_buffer.cleared")]
@@ -58,7 +57,7 @@ pub enum ServerEvent {
     #[serde(rename = "conversation.item.deleted")]
     ConversationItemDeleted(ConversationItemDeleteEvent),
     #[serde(rename = "response.created")]
-    ResponseCreated(ResponseCreateEvent),
+    ResponseCreated(ResponseCreatedEvent),
     #[serde(rename = "response.done")]
     ResponseDone(ResponseDoneEvent),
     #[serde(rename = "response.output_item.added")]
@@ -85,6 +84,6 @@ pub enum ServerEvent {
     ResponseFunctionCallArgumentsDelta(ResponseFunctionCallArgumentsDeltaEvent),
     #[serde(rename = "response.function_call_arguments.done")]
     ResponseFunctionCallArgumentsDone(ResponseFunctionCallArgumentsDoneEvent),
-    #[serde(rename = "response.function_call_output.delta")]
+    #[serde(rename = "rate_limits.updated")]
     RateLimitsUpdated(RateLimitsUpdatedEvent),
 }

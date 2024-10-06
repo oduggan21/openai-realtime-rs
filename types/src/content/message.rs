@@ -85,7 +85,7 @@ impl MessageItemBuilder {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub enum MessageRole {
     #[serde(rename = "user")]
     User,
@@ -95,7 +95,7 @@ pub enum MessageRole {
     System,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Content {
     #[serde(rename = "input_text")]
@@ -118,7 +118,7 @@ impl Content {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct InputTextContent {
     text: String,
 }
@@ -135,7 +135,7 @@ impl InputTextContent {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct InputAudioContent {
     audio: Base64EncodedAudioBytes,
 }
@@ -152,49 +152,38 @@ impl InputAudioContent {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct TextContent {
-    text: Option<String>,
-    transcript: Option<String>,
+    text: String,
 }
 
 impl TextContent {
     pub fn new(text: &str) -> Self {
         Self {
-            text: Some(text.to_string()),
-            transcript: None,
+            text: text.to_string(),
         }
     }
 
-    pub fn new_transcript(transcript: &str) -> Self {
-        Self {
-            text: None,
-            transcript: Some(transcript.to_string()),
-        }
-    }
-
-    pub fn text(&self) -> Option<String> {
+    pub fn text(&self) -> String {
         self.text.clone()
     }
 
-    pub fn transcript(&self) -> Option<String> {
-        self.transcript.clone()
-    }
+   
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct AudioContent {
-    audio: Base64EncodedAudioBytes,
+    transcript: String,
 }
 
 impl AudioContent {
-    pub fn new(audio: Base64EncodedAudioBytes) -> Self {
+    pub fn new(text: &str) -> Self {
         Self {
-            audio,
+            transcript: text.to_string(),
         }
     }
 
-    pub fn audio(&self) -> Base64EncodedAudioBytes {
-        self.audio.clone()
+    pub fn transcript(&self) -> String {
+        self.transcript.clone()
     }
 }

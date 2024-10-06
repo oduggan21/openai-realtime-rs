@@ -98,11 +98,20 @@ impl ResponseResource {
 }
 
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 pub struct Usage {
     total_tokens: i32,
     input_tokens: i32,
+    input_token_details: Option<TokenUsageDetails>,
     output_tokens: i32,
+    output_token_details: Option<TokenUsageDetails>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+pub struct TokenUsageDetails {
+    audio_tokens: i32,
+    text_tokens: i32,
+    cached_tokens: Option<i32>
 }
 
 impl Usage {
@@ -119,7 +128,7 @@ impl Usage {
 
 
 /// Rate limit information
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct RateLimitInformation {
     /// The name of the rate limit ("requests", "tokens", "input_tokens", "output_tokens").
     name: String,

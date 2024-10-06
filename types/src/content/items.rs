@@ -22,22 +22,13 @@ pub enum ItemStatus {
     Incomplete,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct _Item {
     /// The unique ID of the item, Optional for client events
     pub id: Option<String>,
 
     /// The status of the item: "completed", "in_progress", "incomplete"
     pub status: Option<ItemStatus>,
-}
-
-impl Default for _Item {
-    fn default() -> Self {
-        Self {
-            id: None,
-            status: None,
-        }
-    }
 }
 
 

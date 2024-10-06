@@ -94,8 +94,7 @@ impl Client {
                             Err(e) => {
                                 let json = serde_json::from_str::<serde_json::Value>(&text);
                                 json.map(|json| {
-                                    let t = json.get("type").map(|t| t.as_str()).flatten().unwrap_or("unknown");
-                                    tracing::error!("failed to deserialize event: {}, type=> {:?}", e, t);
+                                    tracing::error!("failed to deserialize event: {}, type=> {:?}", e, json);
                                 }).unwrap_or_else(|_| {
                                     tracing::error!("failed to deserialize event: {}, text=> {:?}", e, text);
                                 });
