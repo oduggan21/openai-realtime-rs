@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
+use openai_realtime_types::audio::Base64EncodedAudioBytes;
 use crate::client::stats::Stats;
 use crate::types;
 
@@ -138,6 +139,11 @@ impl Client {
             }
             None => Err("not connected yet".into()),
         }
+    }
+    
+    pub async fn append_input_audio_buffer(&mut self, audio: Base64EncodedAudioBytes) -> Result<(), Box<dyn std::error::Error>> {
+        let event = types::ClientEvent::InputAudioBufferAppend(types::events::client::InputAudioBufferAppendEvent::new(audio));
+        self.send_client_event(event).await
     }
     
     pub async fn create_conversation_item(&mut self, item: types::Item) -> Result<(), Box<dyn std::error::Error>> {

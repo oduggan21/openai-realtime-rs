@@ -1,5 +1,5 @@
 [workspace]
-members = ["types"]
+members = ["types", "utils"]
 
 [package]
 name = "openai-realtime"
@@ -24,9 +24,14 @@ secrecy = { version = "0.10", features = ["serde"]}
 
 
 [dev-dependencies]
+openai-realtime-utils = { path = "utils" }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 dotenvy = { workspace = true }
-
+cpal = "0.15"
+anyhow = "1"
+ringbuf = "0.4.7"
+rubato = "0.16"
+hound = "3.5"
 
 [workspace.dependencies]
 futures = { version = "0.3" }
@@ -39,3 +44,9 @@ dotenvy = { version = "0.15" }
 clap = { version = "4", features = ["derive", "cargo"] }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+
+[[example]]
+name = "a2a"
+path = "examples/audio_to_audio.rs"
+

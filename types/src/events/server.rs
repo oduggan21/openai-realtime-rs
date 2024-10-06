@@ -686,6 +686,32 @@ pub struct ResponseAudioDeltaEvent {
     delta: String,
 }
 
+impl ResponseAudioDeltaEvent {
+    pub fn event_id(&self) -> &str {
+        &self.event_id
+    }
+
+    pub fn response_id(&self) -> &str {
+        &self.response_id
+    }
+
+    pub fn item_id(&self) -> &str {
+        &self.item_id
+    }
+
+    pub fn output_index(&self) -> i32 {
+        self.output_index
+    }
+
+    pub fn content_index(&self) -> i32 {
+        self.content_index
+    }
+
+    pub fn delta(&self) -> &str {
+        &self.delta
+    }
+}
+
 /// `response.audio.done` event
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ResponseAudioDoneEvent {
