@@ -3,16 +3,18 @@ members = ["types", "utils"]
 
 [package]
 name = "openai-realtime"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 
 [features]
 default = ["native-tls"]
 native-tls = ["tokio-tungstenite/native-tls"]
 rustls = ["tokio-tungstenite/rustls-tls-native-roots"]
+utils = ["openai-realtime-utils"]
 
 [dependencies]
 openai-realtime-types = { path = "types" }
+openai-realtime-utils = { path = "utils", optional = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 tokio = { workspace = true }
@@ -47,6 +49,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 
 [[example]]
-name = "a2a"
-path = "examples/audio_to_audio.rs"
+name = "voice"
+path = "examples/voice.rs"
 

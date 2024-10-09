@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 use openai_realtime_types::audio::Base64EncodedAudioBytes;
+use openai_realtime_types::session::Session;
 use crate::client::stats::Stats;
 use crate::types;
 
@@ -41,7 +42,7 @@ impl Client {
         let request = utils::build_request(&self.config)?;
         let (ws_stream, _) = tokio_tungstenite::connect_async(request).await?;
 
-        let (mut write, read) = ws_stream.split();
+        let (mut write, mut read) = ws_stream.split();
 
         let (c_tx, mut c_rx) = tokio::sync::mpsc::channel(100);
         let (s_tx, _) = tokio::sync::broadcast::channel(100);
@@ -66,9 +67,16 @@ impl Client {
 
         let stats = self.stats.clone();
         tokio::spawn(async move {
-            read.for_each(|message| async {
+            while let Some(message) = read.next().await {
+                let message = match message {
+                    Err(e) => {
+                        tracing::error!("failed to read message: {}", e);
+                        break;
+                    }
+                    Ok(message) => message,
+                };
                 match message {
-                    Ok(Message::Text(text)) => {
+                    Message::Text(text) => {
                         match serde_json::from_str::<types::ServerEvent>(&text) {
                             Ok(event) => {
                                 if let Err(e) = s_tx.send(event.clone()) {
@@ -80,13 +88,13 @@ impl Client {
                                         let total_tokens = usage.total_tokens();
                                         let input_tokens = usage.input_tokens();
                                         let output_tokens = usage.output_tokens();
-                                        
+
                                         if let Ok(mut stats_guard) = stats.lock() {
                                             stats_guard.update_usage(total_tokens, input_tokens, output_tokens);
                                         } else {
                                             tracing::error!("failed to update stats");
                                         }
-                                        
+
                                         tracing::debug!("total_tokens: {}, input_tokens: {}, output_tokens: {}", total_tokens, input_tokens, output_tokens);
                                     }
                                 }
@@ -103,15 +111,17 @@ impl Client {
                             }
                         }
                     }
-                    Ok(Message::Binary(bin)) => {
+                    Message::Binary(bin) => {
                         tracing::warn!("unexpected binary message: {:?}", bin);
                     }
-                    Err (e) => {
-                        tracing::error!("failed to read message: {}", e);
-                    }
+                    Message::Close(reason) => {
+                        tracing::info!("connection closed: {:?}", reason);
+                        break;
+                    },
                     _ => {}
                 }
-            }).await;
+            }
+            
         });
         Ok(())
     }
@@ -139,6 +149,11 @@ impl Client {
             }
             None => Err("not connected yet".into()),
         }
+    }
+    
+    pub async fn update_session(&mut self, config: Session) -> Result<(), Box<dyn std::error::Error>> {
+        let event = types::ClientEvent::SessionUpdate(types::events::client::SessionUpdateEvent::new(config));
+        self.send_client_event(event).await
     }
     
     pub async fn append_input_audio_buffer(&mut self, audio: Base64EncodedAudioBytes) -> Result<(), Box<dyn std::error::Error>> {

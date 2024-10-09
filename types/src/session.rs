@@ -5,31 +5,40 @@ use crate::tools::{Tool, ToolChoice};
 pub struct Session {
     /// The set of modalities the model can respond with. To disable audio, set this to ["text"].
     /// To enable audio, set this to ["text", "audio"].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     modalities: Vec<String>,
 
     /// The default system instructions prepended to model calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
     instructions: Option<String>,
 
     /// The voice the model uses to respond. Cannot be changed once the model has responded with audio at least one.
     /// ex: "alloy"
+    #[serde(skip_serializing_if = "Option::is_none")]
     voice: Option<Voice>,
 
     /// The format of input audio. Options are "pcm16", "g711_ulaw", "g711_alaw".
+    #[serde(skip_serializing_if = "Option::is_none")]
     input_audio_format: Option<AudioFormat>,
 
     /// The format of output audio. Options are "pcm16", "g711_ulaw", "g711_alaw".
+    #[serde(skip_serializing_if = "Option::is_none")]
     output_audio_format: Option<AudioFormat>,
 
     /// Configuration for input audio transcription. Can be set to null to turn off
+    #[serde(skip_serializing_if = "Option::is_none")]
     input_audio_transcription: Option<InputAudioTranscription>,
 
     /// Configuration for turn detection. Can be set to null to turn off
+    #[serde(skip_serializing_if = "Option::is_none")]
     turn_detection: Option<TurnDetection>,
 
     /// Tools(Functions) available to the model.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<Tool>,
 
     /// How the model chooses tools. Options are "auto", "none", "required", or specify a function.
+    #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<ToolChoice>,
 
     /// Sampling temperature for the model.
@@ -37,13 +46,19 @@ pub struct Session {
 
     /// Maximum number of output tokens. Use "inf" for infinity.
     /// "inf" or number
+    #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<MaxOutputTokens>,
     
     /// The time in seconds when the session will expire.
+    #[serde(skip_serializing_if = "Option::is_none")]
     expires_at: Option<i32>,
 }
 
-impl Session {}
+impl Session {
+    pub fn new() -> SessionConfigurator {
+        SessionConfigurator::new()
+    }
+}
 
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -70,8 +85,8 @@ impl SessionConfigurator {
                 input_audio_transcription: None,
                 turn_detection: None,
                 tools: vec![],
-                tool_choice: Some(ToolChoice::Auto),
-                temperature: 0.0,
+                tool_choice: None,
+                temperature: 0.8,
                 max_output_tokens: None,
                 expires_at: None,
             }

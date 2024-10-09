@@ -83,7 +83,7 @@ impl ConversationCreatedEvent {
 
 /// `input_audio_buffer.commited` event
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct InputAudioBufferCommitedEvent {
+pub struct InputAudioBufferCommittedEvent {
     event_id: String,
 
 
@@ -93,7 +93,7 @@ pub struct InputAudioBufferCommitedEvent {
     item_id: String,
 }
 
-impl InputAudioBufferCommitedEvent {
+impl InputAudioBufferCommittedEvent {
     pub fn event_id(&self) -> &str {
         &self.event_id
     }
@@ -125,7 +125,7 @@ pub struct InputAudioBufferSpeechStartedEvent {
     event_id: String,
 
     /// Milliseconds since the session started when speech was detected
-    audio_start_md: i32,
+    audio_start_ms: i32,
     /// The ID of the user message item that will be created when speech stops
     item_id: String,
 }
@@ -135,8 +135,8 @@ impl InputAudioBufferSpeechStartedEvent {
         &self.event_id
     }
 
-    pub fn audio_start_md(&self) -> i32 {
-        self.audio_start_md
+    pub fn audio_start_ms(&self) -> i32 {
+        self.audio_start_ms
     }
 
     pub fn item_id(&self) -> &str {
@@ -150,7 +150,7 @@ pub struct InputAudioBufferSpeechStoppedEvent {
     event_id: String,
 
     /// Milliseconds since the session started when speech stopped
-    audio_end_md: i32,
+    audio_end_ms: i32,
     /// The ID of the user message item that will be created
     item_id: String,
 }
@@ -160,8 +160,8 @@ impl InputAudioBufferSpeechStoppedEvent {
         &self.event_id
     }
 
-    pub fn audio_end_md(&self) -> i32 {
-        self.audio_end_md
+    pub fn audio_end_ms(&self) -> i32 {
+        self.audio_end_ms
     }
 
     pub fn item_id(&self) -> &str {

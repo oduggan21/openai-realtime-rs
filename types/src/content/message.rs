@@ -75,10 +75,10 @@ impl MessageItemBuilder {
         self
     }
     
-    pub fn with_input_audio(mut self, audio: Base64EncodedAudioBytes) -> Self {
-        self.item.content.push(Content::input_audio(audio));
-        self
-    }
+    // pub fn with_input_audio(mut self, audio: Base64EncodedAudioBytes) -> Self {
+    //     self.item.content.push(Content::input_audio(audio));
+    //     self
+    // }
     
     pub fn build(self) -> MessageItem {
         self.item
@@ -112,10 +112,6 @@ impl Content {
     pub fn input_text(text: &str) -> Self {
         Content::InputText(InputTextContent::new(text))
     }
-    
-    pub fn input_audio(audio: Base64EncodedAudioBytes) -> Self {
-        Content::InputAudio(InputAudioContent::new(audio))
-    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -137,18 +133,16 @@ impl InputTextContent {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct InputAudioContent {
-    audio: Base64EncodedAudioBytes,
+    transcript: Option<String>,
+    audio: Option<Base64EncodedAudioBytes>,
 }
 
 impl InputAudioContent {
-    pub fn new(audio: Base64EncodedAudioBytes) -> Self {
+    pub fn new() -> Self {
         Self {
-            audio,
+            transcript: None,
+            audio: None,
         }
-    }
-
-    pub fn audio(&self) -> Base64EncodedAudioBytes {
-        self.audio.clone()
     }
 }
 

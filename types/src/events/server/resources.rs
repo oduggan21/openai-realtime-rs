@@ -124,6 +124,26 @@ impl Usage {
     pub fn output_tokens(&self) -> i32 {
         self.output_tokens
     }
+    
+    pub fn input_token_details(&self) -> Option<TokenUsageDetails> {
+        self.input_token_details.clone()
+    }
+    
+    pub fn output_token_details(&self) -> Option<TokenUsageDetails> {
+        self.output_token_details.clone()
+    }
+}
+
+impl TokenUsageDetails {
+    pub fn audio_tokens(&self) -> i32 {
+        self.audio_tokens
+    }
+    pub fn text_tokens(&self) -> i32 {
+        self.text_tokens
+    }
+    pub fn cached_tokens(&self) -> Option<i32> {
+        self.cached_tokens.clone()
+    }
 }
 
 
@@ -137,7 +157,7 @@ pub struct RateLimitInformation {
     /// The remaining value before the limit is reached.
     remaining: i32,
     /// Seconds until the rate limit resets.
-    reset_seconds: i32,
+    reset_seconds: f32,
 }
 
 impl RateLimitInformation {
@@ -154,7 +174,7 @@ impl RateLimitInformation {
         self.remaining
     }
     /// Seconds until the rate limit resets.
-    pub fn reset_seconds(&self) -> i32 {
+    pub fn reset_seconds(&self) -> f32 {
         self.reset_seconds
     }
 }

@@ -4,6 +4,7 @@ pub mod audio;
 pub mod events;
 mod content;
 
+pub use session::Session;
 pub use content::items::Item;
 pub use content::message::*;
 pub use content::parts::ContentPart;

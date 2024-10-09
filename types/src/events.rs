@@ -38,8 +38,8 @@ pub enum ServerEvent {
     SessionUpdated(SessionUpdatedEvent),
     #[serde(rename = "conversation.created")]
     ConversationCreated(ConversationCreatedEvent),
-    #[serde(rename = "input_audio_buffer.commited")]
-    InputAudioBufferCommitted(InputAudioBufferCommitedEvent),
+    #[serde(rename = "input_audio_buffer.committed")]
+    InputAudioBufferCommitted(InputAudioBufferCommittedEvent),
     #[serde(rename = "input_audio_buffer.cleared")]
     InputAudioBufferCleared(InputAudioBufferClearedEvent),
     #[serde(rename = "input_audio_buffer.speech_started")]
