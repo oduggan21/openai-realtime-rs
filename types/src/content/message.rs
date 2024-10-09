@@ -133,6 +133,7 @@ impl InputTextContent {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct InputAudioContent {
+    text: Option<String>,
     transcript: Option<String>,
     audio: Option<Base64EncodedAudioBytes>,
 }
@@ -140,6 +141,7 @@ pub struct InputAudioContent {
 impl InputAudioContent {
     pub fn new() -> Self {
         Self {
+            text: None,
             transcript: None,
             audio: None,
         }

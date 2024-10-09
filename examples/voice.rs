@@ -14,6 +14,8 @@ const OUTPUT_LATENCY_MS: usize = 1000;
 
 pub enum Input {
     Audio(Vec<f32>),
+    Initialize(),
+    Initialized(),
     AISpeaking(),
     AISpeakingDone(),
 }
@@ -143,6 +145,7 @@ async fn main() {
         }
     });
 
+    let client_ctrl2 = input_tx.clone();
     let mut server_events = realtime_api.server_events().await.expect("failed to get server events");
     let server_handle = tokio::spawn(async move {
         while let Ok(e) = server_events.recv().await {
@@ -150,6 +153,27 @@ async fn main() {
             match e {
                 openai_realtime::types::events::ServerEvent::SessionCreated(data) => {
                     println!("session created: {:?}", data.session());
+                    if let Err(e) = client_ctrl2.try_send(Input::Initialize()) {
+                        eprintln!("Failed to send initialized event to client: {:?}", e);
+                    }
+                }
+                openai_realtime::types::events::ServerEvent::SessionUpdated(data) => {
+                    println!("session updated: {:?}", data.session());
+                    if let Err(e) = client_ctrl2.try_send(Input::Initialized()) {
+                        eprintln!("Failed to send initialized event to client: {:?}", e);
+                    }
+                }
+                // openai_realtime::types::events::ServerEvent::ConversationItemCreated(data) => {
+                //     println!("conversation item created: {:?}", data.item());
+                // }
+                openai_realtime::types::events::ServerEvent::InputAudioBufferSpeechStarted(data) => {
+                    println!("speech started: {:?}", data);
+                }
+                openai_realtime::types::events::ServerEvent::InputAudioBufferSpeechStopped(data) => {
+                    println!("speech stopped: {:?}", data);
+                }
+                openai_realtime::types::events::ServerEvent::ConversationItemInputAudioTranscriptionCompleted(data ) => {
+                    println!("Human: {:?}, e:{:?} i:{:?}", data.transcript().trim(), data.event_id(), data.item_id());
                 }
                 openai_realtime::types::events::ServerEvent::ResponseAudioDelta(data) => {
                     if let Err(e) = post_tx.send(data.delta().to_string()).await {
@@ -159,6 +183,9 @@ async fn main() {
                 // openai_realtime::types::events::ServerEvent::ResponseTextDone(data) => {
                 //     println!("text: {:?}", data.text());
                 // }
+                openai_realtime::types::events::ServerEvent::ResponseCreated(data ) => {
+                    println!("response created: {:?}", data.response());
+                }
                 openai_realtime::types::events::ServerEvent::ResponseAudioTranscriptDone(data) => {
                     println!("AI: {:?}", data.transcript());
                 }
@@ -166,7 +193,8 @@ async fn main() {
                 //     println!("audio done: {:?}", data);
                 // }
                 openai_realtime::types::events::ServerEvent::ResponseDone(data) => {
-                    println!("response done usage: {:?}", data.response().usage());
+                    println!("usage: {:?}", data.response().usage());
+                    println!("output: {:?}", data.response().output());
                 }
                 _ => {}
             }
@@ -183,9 +211,24 @@ async fn main() {
     let client_handle = tokio::spawn(async move {
 
         let mut ai_speaking = false;
+        let mut initialized = false;
 
         while let Some(i) = input_rx.recv().await {
             match i {
+                Input::Initialize() => {
+                    println!("initializing...");
+                    let session = openai_realtime::types::Session::new()
+                        .with_modalities_enable_audio()
+                        .with_voice(openai_realtime::types::audio::Voice::Shimmer)
+                        .with_input_audio_transcription_enable(openai_realtime::types::audio::TranscriptionModel::Whisper)
+                        .build();
+                    println!("session config: {:?}", serde_json::to_string(&session).unwrap());
+                    realtime_api.update_session(session).await.expect("failed to init session");
+                }
+                Input::Initialized() => {
+                    println!("initialized");
+                    initialized = true;
+                }
                 Input::AISpeaking() => {
                     if !ai_speaking {
                         println!("AI speaking...");
@@ -199,7 +242,7 @@ async fn main() {
                     ai_speaking = false;
                 }
                 Input::Audio(audio) => {
-                    if !ai_speaking {
+                    if initialized && !ai_speaking {
                         if let Ok(resamples) = in_resampler.process(&[audio.as_slice()], None) {
                             if let Some(resamples) = resamples.first() {
                                 let audio_bytes = utils::audio::encode(resamples);
