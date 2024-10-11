@@ -88,8 +88,8 @@ impl ResponseResource {
         self.status_details.clone()
     }
 
-    pub fn output(&self) -> Vec<ItemResource> {
-        self.output.clone()
+    pub fn outputs(&self) -> Vec<(String, Item)> {
+        self.output.iter().map(|item| (item.id().to_string(), item.content())).collect()
     }
 
     pub fn usage(&self) -> Option<Usage> {

@@ -4,6 +4,10 @@ use ringbuf::{
     traits::{Consumer, Producer, Split},
 };
 use rubato::Resampler;
+use tracing::instrument::WithSubscriber;
+use tracing::Level;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::time::ChronoLocal;
 use openai_realtime_types::audio::Base64EncodedAudioBytes;
 use openai_realtime_utils as utils;
 use openai_realtime_utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
@@ -22,6 +26,13 @@ pub enum Input {
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv_override().ok();
+    
+    tracing_subscriber::fmt()
+        .with_max_level(Level::DEBUG)
+        .with_timer(ChronoLocal::rfc_3339())
+        .init();
+    
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Input>(1024);
 
     // Setup audio input device
@@ -194,7 +205,7 @@ async fn main() {
                 // }
                 openai_realtime::types::events::ServerEvent::ResponseDone(data) => {
                     println!("usage: {:?}", data.response().usage());
-                    println!("output: {:?}", data.response().output());
+                    println!("output: {:?}", data.response().outputs());
                 }
                 _ => {}
             }

@@ -77,6 +77,13 @@ impl Client {
                 };
                 match message {
                     Message::Text(text) => {
+                        
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                            let event_type = json.get("type").map(|v| v.as_str()).flatten();
+                            let event_id = json.get("event_id").map(|v| v.as_str()).flatten();
+                            tracing::debug!("received message: {}, id={}", event_type.unwrap_or("unknown"), event_id.unwrap_or("unknown"));
+                        }
+                        
                         match serde_json::from_str::<types::ServerEvent>(&text) {
                             Ok(event) => {
                                 if let Err(e) = s_tx.send(event.clone()) {
@@ -121,7 +128,7 @@ impl Client {
                     _ => {}
                 }
             }
-            
+
         });
         Ok(())
     }
@@ -150,7 +157,7 @@ impl Client {
             None => Err("not connected yet".into()),
         }
     }
-    
+
     pub async fn update_session(&mut self, config: Session) -> Result<(), Box<dyn std::error::Error>> {
         let event = types::ClientEvent::SessionUpdate(types::events::client::SessionUpdateEvent::new(config));
         self.send_client_event(event).await

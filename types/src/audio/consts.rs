@@ -23,7 +23,7 @@ impl Serialize for Voice {
             Voice::Onyx => serializer.serialize_str("onyx"),
             Voice::Nova => serializer.serialize_str("nova"),
             Voice::Shimmer => serializer.serialize_str("shimmer"),
-            Voice::Custom(s) => serializer.serialize_str(s),
+            Voice::Custom(s) => serializer.serialize_str(s.to_lowercase().as_str()),
         }
     }
 }
@@ -33,7 +33,8 @@ impl FromStr for Voice {
     type Err = serde_json::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
+        let lower = s.to_lowercase();
+        Ok(match lower.as_str() {
             "alloy" => Voice::Alloy,
             "echo" => Voice::Echo,
             "fable" => Voice::Fable,
