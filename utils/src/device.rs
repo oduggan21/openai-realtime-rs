@@ -41,7 +41,7 @@ pub fn get_or_default_output(device_name: Option<String>) -> anyhow::Result<Devi
     Ok(device)
 }
 
-pub fn get_available() -> String {
+pub fn get_available_inputs() -> String {
     for host in cpal::available_hosts() {
         tracing::debug!("Available host: {:?}", host);
     }
@@ -59,6 +59,36 @@ pub fn get_available() -> String {
         let d_cfg = in_device
             .default_input_config()
             .expect("Device has no default input config...");
+        let d_sampling_rate = d_cfg.sample_rate().0;
+        let d_ch = d_cfg.channels();
+
+        let mut d = format!(" * {}({}ch, {}hz)", d_name, d_ch, d_sampling_rate);
+        if d_name == default_device {
+            d.push_str(" [default]");
+        }
+        device_names.push(d);
+    }
+    device_names.join("\n")
+}
+
+pub fn get_available_outputs() -> String {
+    for host in cpal::available_hosts() {
+        tracing::debug!("Available host: {:?}", host);
+    }
+
+    let host = cpal::default_host();
+    let mut device_names: Vec<String> = Vec::new();
+    let default_device = host
+        .default_output_device()
+        .expect("No default output device")
+        .name()
+        .expect("Default output device has no name...");
+    let output_devices = host.output_devices().expect("No output devices found");
+    for out_device in output_devices {
+        let d_name = out_device.name().expect("Device has no name...");
+        let d_cfg = out_device
+            .default_output_config()
+            .expect("Device has no default output config...");
         let d_sampling_rate = d_cfg.sample_rate().0;
         let d_ch = d_cfg.channels();
 

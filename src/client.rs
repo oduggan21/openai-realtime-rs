@@ -177,6 +177,11 @@ impl Client {
         let event = types::ClientEvent::ResponseCreate(types::events::client::ResponseCreateEvent::new());
         self.send_client_event(event).await
     }
+    
+    pub async fn create_response_with_config(&mut self, config: Session) -> Result<(), Box<dyn std::error::Error>> {
+        let event = types::ClientEvent::ResponseCreate(types::events::client::ResponseCreateEvent::new().with_update_session(config));
+        self.send_client_event(event).await
+    }
 }
 
 pub async fn connect_with_config(config: config::Config) -> Result<Client, Box<dyn std::error::Error>> {
