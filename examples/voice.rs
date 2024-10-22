@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use cpal::{FrameCount, StreamConfig};
 use cpal::traits::{DeviceTrait, StreamTrait};
 use ringbuf::{
@@ -232,6 +233,7 @@ async fn main() {
 
         let mut ai_speaking = false;
         let mut initialized = false;
+        let mut buffer: VecDeque<f32> = VecDeque::with_capacity(INPUT_CHUNK_SIZE * 2);
 
         while let Some(i) = input_rx.recv().await {
             match i {
@@ -263,13 +265,25 @@ async fn main() {
                 }
                 Input::Audio(audio) => {
                     if initialized && !ai_speaking {
-                        if let Ok(resamples) = in_resampler.process(&[audio.as_slice()], None) {
-                            if let Some(resamples) = resamples.first() {
-                                let audio_bytes = utils::audio::encode(resamples);
-                                let audio_bytes = Base64EncodedAudioBytes::from(audio_bytes);
-                                realtime_api.append_input_audio_buffer(audio_bytes.clone()).await.expect("failed to send audio");
+                        for sample in audio {
+                            buffer.push_back(sample);
+                        }
+                        let mut resampled: Vec<f32> = vec![];
+                        while buffer.len() >= INPUT_CHUNK_SIZE {
+                            let audio: Vec<f32> = buffer.drain(..INPUT_CHUNK_SIZE).collect();
+                            if let Ok(resamples) = in_resampler.process(&[audio.as_slice()], None) {
+                                if let Some(resamples) = resamples.first() {
+                                    resampled.extend(resamples.iter().cloned());
+                                }
                             }
                         }
+                        if resampled.is_empty() {
+                            continue;
+                        }
+                        let audio_bytes = utils::audio::encode(&resampled);
+                        let audio_bytes = Base64EncodedAudioBytes::from(audio_bytes);
+                        realtime_api.append_input_audio_buffer(audio_bytes.clone()).await.expect("failed to send audio");
+
                     }
                 }
             }

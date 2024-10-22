@@ -1,15 +1,17 @@
 use cpal::Device;
 use cpal::traits::{DeviceTrait, HostTrait};
 
-
+fn get_host() -> cpal::Host {
+    // if cfg!(target_os = "windows") {
+    //     cpal::host_from_id(cpal::HostId::Asio).expect("failed to initialise ASIO host")
+    // } else {
+    //     cpal::default_host()
+    // }
+    cpal::default_host()
+}
 
 pub fn get_or_default_input(device_name: Option<String>) -> anyhow::Result<Device> {
-    let host = if cfg!(target_os = "windows") {
-        cpal::host_from_id(cpal::HostId::Asio).expect("failed to initialise ASIO host")
-    } else {
-        cpal::default_host()
-    };
-
+    let host = get_host();
     tracing::debug!("Host: {:?}", host.id());
     let target = device_name
         .clone()
@@ -30,12 +32,7 @@ pub fn get_or_default_input(device_name: Option<String>) -> anyhow::Result<Devic
 }
 
 pub fn get_or_default_output(device_name: Option<String>) -> anyhow::Result<Device> {
-    let host = if cfg!(target_os = "windows") {
-        cpal::host_from_id(cpal::HostId::Asio).expect("failed to initialise ASIO host")
-    } else {
-        cpal::default_host()
-    };
-
+    let host = get_host();
     let target = device_name
         .clone()
         .unwrap_or_else(|| host.default_output_device().unwrap().name().unwrap());
@@ -59,11 +56,8 @@ pub fn get_available_inputs() -> String {
         tracing::debug!("Available host: {:?}", host);
     }
 
-    let host = if cfg!(target_os = "windows") {
-        cpal::host_from_id(cpal::HostId::Asio).expect("failed to initialise ASIO host")
-    } else {
-        cpal::default_host()
-    };
+    let host = get_host();
+
     let mut device_names: Vec<String> = Vec::new();
     let default_device = host
         .default_input_device()
@@ -93,12 +87,7 @@ pub fn get_available_outputs() -> String {
         tracing::debug!("Available host: {:?}", host);
     }
 
-    let host = if cfg!(target_os = "windows") {
-        cpal::host_from_id(cpal::HostId::Asio).expect("failed to initialise ASIO host")
-    } else {
-        cpal::default_host()
-    };
-
+    let host = get_host();
     let mut device_names: Vec<String> = Vec::new();
     let default_device = host
         .default_output_device()

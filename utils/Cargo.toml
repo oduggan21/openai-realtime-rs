@@ -9,10 +9,10 @@ rubato = "0.16"
 anyhow = "1"
 base64 = "0.22"
 ringbuf = "0.4.7"
-cpal = { version = "0.15.3", features = ["asio"] }
+cpal = { version = "0.15.3"}
 
-[target.'cfg(target_os = "windows")'.dependencies]
-cpal = { version = "0.15.3", features = ["asio"] }
-
-[target.'cfg(not(target_os = "windows"))'.dependencies]
-cpal = "0.15.3"
+#[target.'cfg(target_os = "windows")'.dependencies]
+#cpal = { version = "0.15.3", features = ["asio"] }
+#
+#[target.'cfg(not(target_os = "windows"))'.dependencies]
+#cpal = "0.15.3"
