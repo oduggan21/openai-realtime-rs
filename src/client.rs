@@ -16,6 +16,7 @@ type ServerTx = tokio::sync::broadcast::Sender<types::ServerEvent>;
 pub type ServerRx = tokio::sync::broadcast::Receiver<types::ServerEvent>;
 
 pub struct Client {
+    capacity: usize,
     config: config::Config,
     c_tx: Option<ClientTx>,
     s_tx: Option<ServerTx>,
@@ -25,8 +26,9 @@ pub struct Client {
 }
 
 impl Client {
-    fn new(config: config::Config) -> Self {
+    fn new(capacity: usize, config: config::Config) -> Self {
         Self {
+            capacity,
             config,
             c_tx: None,
             s_tx: None,
@@ -44,8 +46,8 @@ impl Client {
 
         let (mut write, mut read) = ws_stream.split();
 
-        let (c_tx, mut c_rx) = tokio::sync::mpsc::channel(100);
-        let (s_tx, _) = tokio::sync::broadcast::channel(100);
+        let (c_tx, mut c_rx) = tokio::sync::mpsc::channel(self.capacity);
+        let (s_tx, _) = tokio::sync::broadcast::channel(self.capacity);
 
         self.c_tx = Some(c_tx.clone());
         self.s_tx = Some(s_tx.clone());
@@ -184,13 +186,13 @@ impl Client {
     }
 }
 
-pub async fn connect_with_config(config: config::Config) -> Result<Client, Box<dyn std::error::Error>> {
-    let mut client = Client::new(config);
+pub async fn connect_with_config(capacity: usize, config: config::Config) -> Result<Client, Box<dyn std::error::Error>> {
+    let mut client = Client::new(capacity, config);
     client.connect().await?;
     Ok(client)
 }
 
 pub async fn connect() -> Result<Client, Box<dyn std::error::Error>> {
     let config = config::Config::new();
-    connect_with_config(config).await
+    connect_with_config(1024, config).await
 }
