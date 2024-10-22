@@ -47,11 +47,19 @@ async fn main() {
         sample_rate: input_config.sample_rate(),
         buffer_size: cpal::BufferSize::Fixed(FrameCount::from(INPUT_CHUNK_SIZE as u32)),
     };
+    let input_channel_count = input_config.channels as usize;
+
     println!("input: device={:?}, config={:?}", &input.name().unwrap(), &input_config);
     let audio_input = input_tx.clone();
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-        println!("audio data: {:?}", data.len());
-        if let Err(e) = audio_input.try_send(Input::Audio(data.to_vec())) {
+        let audio = if input_channel_count > 1 {
+            data.chunks(input_channel_count).map(|c| {
+                c.iter().sum::<f32>() / input_channel_count as f32
+            }).collect::<Vec<f32>>()
+        } else {
+            data.to_vec()
+        };
+        if let Err(e) = audio_input.try_send(Input::Audio(audio)) {
             eprintln!("Failed to send audio data to buffer: {:?}", e);
         }
     };
@@ -89,7 +97,6 @@ async fn main() {
 
     let client_ctrl = input_tx.clone();
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-        // println!("output data: {:?}", data.len());
         let mut sample_index = 0;
         let mut silence = 0;
         while sample_index < data.len() {
@@ -235,13 +242,14 @@ async fn main() {
         let mut initialized = false;
         let mut buffer: VecDeque<f32> = VecDeque::with_capacity(INPUT_CHUNK_SIZE * 2);
 
+    
         while let Some(i) = input_rx.recv().await {
             match i {
                 Input::Initialize() => {
                     println!("initializing...");
                     let session = openai_realtime::types::Session::new()
                         .with_modalities_enable_audio()
-                        .with_voice(openai_realtime::types::audio::Voice::Shimmer)
+                        .with_voice(openai_realtime::types::audio::Voice::Alloy)
                         .with_input_audio_transcription_enable(openai_realtime::types::audio::TranscriptionModel::Whisper)
                         .build();
                     println!("session config: {:?}", serde_json::to_string(&session).unwrap());
@@ -249,6 +257,11 @@ async fn main() {
                 }
                 Input::Initialized() => {
                     println!("initialized");
+                    // let config = openai_realtime::types::Session::new()
+                    //     .with_modalities_enable_audio()
+                    //     .with_instructions("Please greeting in Japanese")
+                    //     .build();
+                    // realtime_api.create_response_with_config(config).await.expect("failed to send message");
                     initialized = true;
                 }
                 Input::AISpeaking() => {
