@@ -3,6 +3,7 @@ use cpal::traits::{DeviceTrait, HostTrait};
 
 pub fn get_or_default_input(device_name: Option<String>) -> anyhow::Result<Device> {
     let host = cpal::default_host();
+    tracing::debug!("Host: {:?}", host.id());
     let target = device_name
         .clone()
         .unwrap_or_else(|| host.default_input_device().unwrap().name().unwrap());

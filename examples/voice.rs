@@ -4,15 +4,13 @@ use ringbuf::{
     traits::{Consumer, Producer, Split},
 };
 use rubato::Resampler;
-use tracing::instrument::WithSubscriber;
 use tracing::Level;
-use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::time::ChronoLocal;
 use openai_realtime_types::audio::Base64EncodedAudioBytes;
 use openai_realtime_utils as utils;
 use openai_realtime_utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
 
-const INPUT_CHUNK_SIZE: usize = 1024;
+const INPUT_CHUNK_SIZE: usize = 480;
 const OUTPUT_CHUNK_SIZE: usize = 1024;
 const OUTPUT_LATENCY_MS: usize = 1000;
 
@@ -37,6 +35,11 @@ async fn main() {
 
     // Setup audio input device
     let input = utils::device::get_or_default_input(None).expect("failed to get input device");
+
+    println!("input: {:?}", &input.name().unwrap());
+    input.supported_input_configs().expect("failed to get supported input configs")
+        .for_each(|c| println!("supported input config: {:?}", c));
+
     let input_config = input.default_input_config().expect("failed to get default input config");
     let input_config = StreamConfig {
         channels: input_config.channels(),
@@ -46,6 +49,7 @@ async fn main() {
     println!("input: device={:?}, config={:?}", &input.name().unwrap(), &input_config);
     let audio_input = input_tx.clone();
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
+        // println!("audio data: {:?}", data.len());
         if let Err(e) = audio_input.try_send(Input::Audio(data.to_vec())) {
             eprintln!("Failed to send audio data to buffer: {:?}", e);
         }
@@ -57,11 +61,16 @@ async fn main() {
         None,
     ).expect("failed to build input stream");
     input_stream.play().expect("failed to play input stream");
-    let input_channel_count = input_config.channels as usize;
+    let _input_channel_count = input_config.channels as usize;
     let input_sample_rate = input_config.sample_rate.0 as f32;
 
 
     let output = utils::device::get_or_default_output(None).expect("failed to get output device");
+
+    println!("output: {:?}", &output.name().unwrap());
+    output.supported_output_configs().expect("failed to get supported output configs")
+        .for_each(|c| println!("supported output config: {:?}", c));
+
     let output_config = output
         .default_output_config()
         .expect("failed to get default output config");
@@ -80,6 +89,7 @@ async fn main() {
 
     let client_ctrl = input_tx.clone();
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+        // println!("output data: {:?}", data.len());
         let mut sample_index = 0;
         let mut silence = 0;
         while sample_index < data.len() {

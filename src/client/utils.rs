@@ -5,7 +5,7 @@ use crate::client::config::Config;
 use crate::client::consts::{AUTHORIZATION_HEADER, OPENAI_BETA_HEADER};
 
 pub fn build_request(config: &Config) -> tokio_tungstenite::tungstenite::Result<Request> {
-    let mut request = format!("{}/realtime?model={}", config.base_url().clone(), config.model().clone()).into_client_request()?;
+    let mut request = format!("{}/realtime?model={}", config.base_url(), config.model()).into_client_request()?;
     request.headers_mut()
         .insert(
             AUTHORIZATION_HEADER,
