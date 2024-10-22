@@ -10,7 +10,7 @@ use openai_realtime_types::audio::Base64EncodedAudioBytes;
 use openai_realtime_utils as utils;
 use openai_realtime_utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
 
-const INPUT_CHUNK_SIZE: usize = 480;
+const INPUT_CHUNK_SIZE: usize = 1024;
 const OUTPUT_CHUNK_SIZE: usize = 1024;
 const OUTPUT_LATENCY_MS: usize = 1000;
 
@@ -49,7 +49,7 @@ async fn main() {
     println!("input: device={:?}, config={:?}", &input.name().unwrap(), &input_config);
     let audio_input = input_tx.clone();
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-        // println!("audio data: {:?}", data.len());
+        println!("audio data: {:?}", data.len());
         if let Err(e) = audio_input.try_send(Input::Audio(data.to_vec())) {
             eprintln!("Failed to send audio data to buffer: {:?}", e);
         }
@@ -63,7 +63,6 @@ async fn main() {
     input_stream.play().expect("failed to play input stream");
     let _input_channel_count = input_config.channels as usize;
     let input_sample_rate = input_config.sample_rate.0 as f32;
-
 
     let output = utils::device::get_or_default_output(None).expect("failed to get output device");
 
