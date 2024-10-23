@@ -224,6 +224,10 @@ async fn main() {
                     println!("usage: {:?}", data.response().usage());
                     println!("output: {:?}", data.response().outputs());
                 }
+                openai_realtime::types::events::ServerEvent::Close { reason } => {
+                    println!("close: {:?}", reason);
+                    break;
+                }
                 _ => {}
             }
         }

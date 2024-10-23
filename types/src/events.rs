@@ -30,6 +30,10 @@ pub enum ClientEvent {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
 pub enum ServerEvent {
+    #[serde(rename = "close")]
+    Close {
+        reason: Option<String>,
+    },
     #[serde(rename = "error")]
     Error(ErrorEvent),
     #[serde(rename = "session.created")]

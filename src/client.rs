@@ -15,11 +15,6 @@ pub type ClientTx = tokio::sync::mpsc::Sender<types::ClientEvent>;
 type ServerTx = tokio::sync::broadcast::Sender<types::ServerEvent>;
 pub type ServerRx = tokio::sync::broadcast::Receiver<types::ServerEvent>;
 
-pub struct Connection {
-    pub(crate) send_handle: tokio::task::JoinHandle<()>,
-    pub(crate) recv_handle: tokio::task::JoinHandle<()>,
-}
-
 pub struct Client {
     capacity: usize,
     config: config::Config,
@@ -39,7 +34,7 @@ impl Client {
         }
     }
 
-    async fn connect(&mut self) -> Result<Connection, Box<dyn std::error::Error>> {
+    async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if self.c_tx.is_some() {
             return Err("already connected".into());
         }
@@ -55,7 +50,7 @@ impl Client {
         self.c_tx = Some(c_tx.clone());
         self.s_tx = Some(s_tx.clone());
 
-        let send_handle = tokio::spawn(async move {
+        tokio::spawn(async move {
             while let Some(event) = c_rx.recv().await {
                 match serde_json::to_string(&event) {
                     Ok(text) => {
@@ -71,7 +66,7 @@ impl Client {
         });
 
         let stats = self.stats.clone();
-        let recv_handle= tokio::spawn(async move {
+        tokio::spawn(async move {
             while let Some(message) = read.next().await {
                 let message = match message {
                     Err(e) => {
@@ -82,13 +77,12 @@ impl Client {
                 };
                 match message {
                     Message::Text(text) => {
-                        
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
                             let event_type = json.get("type").map(|v| v.as_str()).flatten();
                             let event_id = json.get("event_id").map(|v| v.as_str()).flatten();
                             tracing::debug!("received message: {}, id={}", event_type.unwrap_or("unknown"), event_id.unwrap_or("unknown"));
                         }
-                        
+
                         match serde_json::from_str::<types::ServerEvent>(&text) {
                             Ok(event) => {
                                 if let Err(e) = s_tx.send(event.clone()) {
@@ -110,7 +104,6 @@ impl Client {
                                         tracing::debug!("total_tokens: {}, input_tokens: {}, output_tokens: {}", total_tokens, input_tokens, output_tokens);
                                     }
                                 }
-
                             }
                             Err(e) => {
                                 let json = serde_json::from_str::<serde_json::Value>(&text);
@@ -128,17 +121,31 @@ impl Client {
                     }
                     Message::Close(reason) => {
                         tracing::info!("connection closed: {:?}", reason);
+                        let close_event = types::ServerEvent::Close {
+                            reason: reason.map(|v| format!("{:?}", v)),
+                        };
+                        if let Err(e) = s_tx.send(close_event) {
+                            tracing::error!("failed to send close event: {}", e);
+                        }
                         break;
                     },
+                    Message::Ping(_) => {
+                        tracing::debug!("received ping");
+                        let close_event = types::ServerEvent::Close {
+                            reason: Some("[test] received ping".to_string()),
+                        };
+                        if let Err(e) = s_tx.send(close_event) {
+                            tracing::error!("failed to send close event: {}", e);
+                        }
+                        break;
+                    }
                     _ => {}
                 }
             }
-
+            drop(c_tx);
+            drop(s_tx);
         });
-        Ok(Connection {
-            send_handle,
-            recv_handle,
-        })
+        Ok(())
     }
 
     pub async fn server_events(&mut self) -> Result<ServerRx, Box<dyn std::error::Error>> {
