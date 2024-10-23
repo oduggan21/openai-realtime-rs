@@ -268,6 +268,7 @@ async fn main() {
                     if !ai_speaking {
                         println!("AI speaking...");
                     }
+                    buffer.clear();
                     ai_speaking = true;
                 }
                 Input::AISpeakingDone() => {

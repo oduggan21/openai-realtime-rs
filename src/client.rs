@@ -15,13 +15,16 @@ pub type ClientTx = tokio::sync::mpsc::Sender<types::ClientEvent>;
 type ServerTx = tokio::sync::broadcast::Sender<types::ServerEvent>;
 pub type ServerRx = tokio::sync::broadcast::Receiver<types::ServerEvent>;
 
+pub struct Connection {
+    pub(crate) send_handle: tokio::task::JoinHandle<()>,
+    pub(crate) recv_handle: tokio::task::JoinHandle<()>,
+}
+
 pub struct Client {
     capacity: usize,
     config: config::Config,
     c_tx: Option<ClientTx>,
     s_tx: Option<ServerTx>,
-
-
     stats: Arc<Mutex<Stats>>
 }
 
@@ -36,7 +39,7 @@ impl Client {
         }
     }
 
-    async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    async fn connect(&mut self) -> Result<Connection, Box<dyn std::error::Error>> {
         if self.c_tx.is_some() {
             return Err("already connected".into());
         }
@@ -52,7 +55,7 @@ impl Client {
         self.c_tx = Some(c_tx.clone());
         self.s_tx = Some(s_tx.clone());
 
-        tokio::spawn(async move {
+        let send_handle = tokio::spawn(async move {
             while let Some(event) = c_rx.recv().await {
                 match serde_json::to_string(&event) {
                     Ok(text) => {
@@ -68,7 +71,7 @@ impl Client {
         });
 
         let stats = self.stats.clone();
-        tokio::spawn(async move {
+        let recv_handle= tokio::spawn(async move {
             while let Some(message) = read.next().await {
                 let message = match message {
                     Err(e) => {
@@ -132,7 +135,10 @@ impl Client {
             }
 
         });
-        Ok(())
+        Ok(Connection {
+            send_handle,
+            recv_handle,
+        })
     }
 
     pub async fn server_events(&mut self) -> Result<ServerRx, Box<dyn std::error::Error>> {

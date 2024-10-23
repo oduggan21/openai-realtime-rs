@@ -1,6 +1,6 @@
 [package]
 name = "openai-realtime-utils"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [dependencies]
@@ -10,9 +10,3 @@ anyhow = "1"
 base64 = "0.22"
 ringbuf = "0.4.7"
 cpal = { version = "0.15.3"}
-
-#[target.'cfg(target_os = "windows")'.dependencies]
-#cpal = { version = "0.15.3", features = ["asio"] }
-#
-#[target.'cfg(not(target_os = "windows"))'.dependencies]
-#cpal = "0.15.3"
