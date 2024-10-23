@@ -129,16 +129,6 @@ impl Client {
                         }
                         break;
                     },
-                    Message::Ping(_) => {
-                        tracing::debug!("received ping");
-                        let close_event = types::ServerEvent::Close {
-                            reason: Some("[test] received ping".to_string()),
-                        };
-                        if let Err(e) = s_tx.send(close_event) {
-                            tracing::error!("failed to send close event: {}", e);
-                        }
-                        break;
-                    }
                     _ => {}
                 }
             }
