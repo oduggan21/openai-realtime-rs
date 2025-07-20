@@ -1,5 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::str::FromStr;
+use std::{convert::Infallible, str::FromStr};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Voice {
     Alloy,
@@ -30,7 +30,7 @@ impl Serialize for Voice {
 
 
 impl FromStr for Voice {
-    type Err = serde_json::Error;
+    type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let lower = s.to_lowercase();
