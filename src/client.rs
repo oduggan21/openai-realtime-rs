@@ -195,7 +195,11 @@ pub async fn connect_with_config(capacity: usize, config: config::Config) -> Res
     Ok(client)
 }
 
+//public function
 pub async fn connect() -> Result<Client, Box<dyn std::error::Error>> {
+    //create the default config object
     let config = config::Config::new();
+    //call connect with config  
     connect_with_config(1024, config).await
 }
+

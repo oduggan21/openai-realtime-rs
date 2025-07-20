@@ -40,10 +40,16 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    //set the default values
    pub fn new() -> Self {
         Self {
+            //convert the &str to String
             base_url: "wss://api.openai.com/v1".to_string(),
+            //get the API key from the environment variable
+            //unwrap the Result and handle it so we don't panic
+            //convert api_key to SecretString if necesary
             api_key: std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "".to_string()).into(),
+            //declare the defualt model
             model: "gpt-4o-realtime-preview-2024-10-01".to_string(),
         }
     }

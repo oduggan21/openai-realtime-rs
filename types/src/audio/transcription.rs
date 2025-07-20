@@ -29,6 +29,10 @@ impl InputAudioTranscription {
         self.model = model;
         self
     }
+    pub fn with_enabled(mut self, enabled: bool) -> Self{
+        self.enabled = Some(enabled);
+        self
+    }
 
     pub fn enabled(&self) -> bool {
         self.enabled.map_or(true, |x| x)
