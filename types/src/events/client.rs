@@ -56,6 +56,7 @@ impl InputAudioBufferAppendEvent {
     }
 }
 
+//tells us when we are done sendinging audio
 /// `input_audio_buffer.commit` event
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InputAudioBufferCommitEvent {

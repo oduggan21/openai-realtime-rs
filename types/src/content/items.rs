@@ -31,6 +31,16 @@ pub struct _Item {
     pub status: Option<ItemStatus>,
 }
 
+impl _Item {
+    pub fn status_as_str(&self) -> Option<&str>{
+        self.status.as_ref().map(|status| match status {
+            ItemStatus::Incomplete => "incomplete",
+            ItemStatus::InProgress => "in_progress",
+            ItemStatus::Completed => "completed",
+        })
+    }
+}
+
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FunctionCallItem {

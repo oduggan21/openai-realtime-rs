@@ -11,6 +11,7 @@ pub enum Voice {
     Custom(String),
 }
 
+//turning object to json
 impl Serialize for Voice {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -46,12 +47,16 @@ impl FromStr for Voice {
     }
 }
 
+//turning json to object
+//'de is a lifetime parameter the indicates the lifetime of the data being deserialized
 impl<'de> Deserialize<'de> for Voice {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
+        //turn json into a string
         let s = String::deserialize(deserializer)?;
+        //convert string into Voice
         Ok(Voice::from_str(&s).unwrap())
     }
 }

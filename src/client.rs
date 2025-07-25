@@ -15,6 +15,9 @@ pub type ClientTx = tokio::sync::mpsc::Sender<types::ClientEvent>;
 type ServerTx = tokio::sync::broadcast::Sender<types::ServerEvent>;
 pub type ServerRx = tokio::sync::broadcast::Receiver<types::ServerEvent>;
 
+
+//contains the capacity which sets the size of the channels, our client and server transmitters, config
+//and stats which is gaurded
 pub struct Client {
     capacity: usize,
     config: config::Config,
@@ -35,29 +38,41 @@ impl Client {
     }
 
     async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        //ensure that we haven't already connected
         if self.c_tx.is_some() {
             return Err("already connected".into());
         }
 
+        //create a request using the build request function
         let request = utils::build_request(&self.config)?;
+
+        //get a tcpStream object
         let (ws_stream, _) = tokio_tungstenite::connect_async(request).await?;
 
+        //split the websocket into read and write
         let (mut write, mut read) = ws_stream.split();
 
+        //create the channels to hold events to send and reveive
         let (c_tx, mut c_rx) = tokio::sync::mpsc::channel(self.capacity);
+        //create the server transmitter that will broadcast out to client recievers
         let (s_tx, _) = tokio::sync::broadcast::channel(self.capacity);
 
+        //clone the server and client transmitters into the struct
         self.c_tx = Some(c_tx.clone());
         self.s_tx = Some(s_tx.clone());
 
+        //this function creates a listening task that will listen for events on the client recieving channel
         tokio::spawn(async move {
             while let Some(event) = c_rx.recv().await {
                 match serde_json::to_string(&event) {
+                    //take the json event and attempt to send it using our websocket
                     Ok(text) => {
+                        //if we hav an error sending message output it 
                         if let Err(e) = write.send(Message::Text(text)).await {
                             tracing::error!("failed to send message: {}", e);
                         }
                     }
+                    //if we get an error converting the json say we failed to seriailze it
                     Err(e) => {
                         tracing::error!("failed to serialize event: {}", e);
                     }
@@ -67,7 +82,9 @@ impl Client {
 
         let stats = self.stats.clone();
         tokio::spawn(async move {
+            //get the message from the websocket, it will come in json format
             while let Some(message) = read.next().await {
+                //message will be equal to the message received or 
                 let message = match message {
                     Err(e) => {
                         tracing::error!("failed to read message: {}", e);
@@ -75,6 +92,7 @@ impl Client {
                     }
                     Ok(message) => message,
                 };
+                //at this point we have the message
                 match message {
                     Message::Text(text) => {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
