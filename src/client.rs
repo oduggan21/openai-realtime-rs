@@ -81,6 +81,11 @@ impl Client {
         });
 
         let stats = self.stats.clone();
+        //spawn event to listen to server event and transmit those out, we first need to ensure we can get a message
+        //next we need to verify the message type(text, binary, close), then we need to get the event type
+        //we use the read websocket channel to receive messages
+        //we use server transmitter to broadcast events
+        //
         tokio::spawn(async move {
             //get the message from the websocket, it will come in json format
             while let Some(message) = read.next().await {
@@ -93,20 +98,26 @@ impl Client {
                     Ok(message) => message,
                 };
                 //at this point we have the message
+                //match the message variant to text, binary, or close
                 match message {
                     Message::Text(text) => {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                            //get the event type as a string
                             let event_type = json.get("type").map(|v| v.as_str()).flatten();
+                            //get the event id as a string
                             let event_id = json.get("event_id").map(|v| v.as_str()).flatten();
+                            //track the messages
                             tracing::debug!("received message: {}, id={}", event_type.unwrap_or("unknown"), event_id.unwrap_or("unknown"));
                         }
-
+                        //match the servent event enum variant or get an error
                         match serde_json::from_str::<types::ServerEvent>(&text) {
                             Ok(event) => {
+                                //send the server event across the transmitting server channel
                                 if let Err(e) = s_tx.send(event.clone()) {
                                     tracing::error!("failed to send event: {}", e);
                                 }
-
+                                
+                                //if the server is done responding record its usage stats
                                 if let types::ServerEvent::ResponseDone(response) = event {
                                     if let Some(usage) = response.response().usage() {
                                         let total_tokens = usage.total_tokens();
@@ -123,6 +134,7 @@ impl Client {
                                     }
                                 }
                             }
+                            //error message to say that we couldn't properly detect the server event
                             Err(e) => {
                                 let json = serde_json::from_str::<serde_json::Value>(&text);
                                 json.map(|json| {
@@ -134,9 +146,11 @@ impl Client {
                             }
                         }
                     }
+                    //we get a binary message and not json 
                     Message::Binary(bin) => {
                         tracing::warn!("unexpected binary message: {:?}", bin);
                     }
+                    //we got that the websocket is closed
                     Message::Close(reason) => {
                         tracing::info!("connection closed: {:?}", reason);
                         let close_event = types::ServerEvent::Close {
@@ -156,6 +170,7 @@ impl Client {
         Ok(())
     }
 
+    //get a server receiver that we can use to receive server events
     pub async fn server_events(&mut self) -> Result<ServerRx, Box<dyn std::error::Error>> {
         match self.s_tx {
             Some(ref tx) => Ok(tx.subscribe()),
@@ -163,6 +178,7 @@ impl Client {
         }
     }
 
+    //return a status objct that we can use to inspect that stats
     pub fn stats(&self) -> Result<Stats, Box<dyn std::error::Error>> {
         if let Ok(stats_guard) = self.stats.lock() {
             Ok(stats_guard.clone())
@@ -171,6 +187,7 @@ impl Client {
         }
     }
     
+    ///send the client event 
     async fn send_client_event(&mut self, event: types::ClientEvent) -> Result<(), Box<dyn std::error::Error>> {
         match self.c_tx {
             Some(ref tx) => {
@@ -181,32 +198,38 @@ impl Client {
         }
     }
 
+    //function to send update session event
     pub async fn update_session(&mut self, config: Session) -> Result<(), Box<dyn std::error::Error>> {
         let event = types::ClientEvent::SessionUpdate(types::events::client::SessionUpdateEvent::new(config));
         self.send_client_event(event).await
     }
     
+    //funciton to send input audio buffer event
     pub async fn append_input_audio_buffer(&mut self, audio: Base64EncodedAudioBytes) -> Result<(), Box<dyn std::error::Error>> {
         let event = types::ClientEvent::InputAudioBufferAppend(types::events::client::InputAudioBufferAppendEvent::new(audio));
         self.send_client_event(event).await
     }
     
+    //function to send conversation item event
     pub async fn create_conversation_item(&mut self, item: types::Item) -> Result<(), Box<dyn std::error::Error>> {
         let event = types::ClientEvent::ConversationItemCreate(types::events::client::ConversationItemCreateEvent::new(item));
         self.send_client_event(event).await
     }
     
+    //function to send create response event
     pub async fn create_response(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let event = types::ClientEvent::ResponseCreate(types::events::client::ResponseCreateEvent::new());
         self.send_client_event(event).await
     }
     
+    //function to send create response with specfic config event
     pub async fn create_response_with_config(&mut self, config: Session) -> Result<(), Box<dyn std::error::Error>> {
         let event = types::ClientEvent::ResponseCreate(types::events::client::ResponseCreateEvent::new().with_update_session(config));
         self.send_client_event(event).await
     }
 }
 
+//public function to create client with specific config and connect to open ai
 pub async fn connect_with_config(capacity: usize, config: config::Config) -> Result<Client, Box<dyn std::error::Error>> {
     let mut client = Client::new(capacity, config);
     client.connect().await?;
