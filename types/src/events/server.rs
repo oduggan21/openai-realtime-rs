@@ -227,6 +227,58 @@ impl ConversationItemInputAudioTranscriptionCompletedEvent {
     }
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct TranscriptionLogprob {
+    bytes: Vec<u8>,
+    logprob: f64,
+    token: String,
+}
+
+impl TranscriptionLogprob{
+    pub fn bytes(&self) -> &Vec<u8>{
+        &self.bytes
+    }
+    pub fn logprob(&self) -> f64{
+        self.logprob
+    }
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+}
+
+/// 'conversation.item.input_audio_transcription.delta' event
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ConversationItemInputAudioTranscriptionDelta{
+    event_id: String,
+
+    item_id: String, 
+
+    content_index: i32,
+
+    delta: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    logprobs: Option<Vec<TranscriptionLogprob>>,
+}
+
+impl ConversationItemInputAudioTranscriptionDelta{
+    pub fn event_id(&self) -> &str {
+        &self.event_id
+    }
+    pub fn item_id(&self) -> &str {
+        &self.item_id
+    }
+    pub fn content_index(&self) -> i32 {
+        self.content_index
+    }
+    pub fn delta(&self) -> &str {
+        &self.delta
+    }
+    pub fn logprobs(&self) -> Option<&Vec<TranscriptionLogprob>> {
+        self.logprobs.as_ref()
+    }
+
+}
+
 /// `conversation.item.input_audio_transcription.failed` event
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConversationItemInputAudioTranscriptionFailedEvent {
