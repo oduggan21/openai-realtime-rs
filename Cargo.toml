@@ -1,5 +1,5 @@
 [workspace]
-members = ["types", "utils"]
+members = [ "feynman-app","types", "utils"]
 
 [package]
 name = "openai-realtime"

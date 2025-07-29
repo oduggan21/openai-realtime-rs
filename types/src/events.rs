@@ -54,7 +54,7 @@ pub enum ServerEvent {
     ConversationItemCreated(ConversationItemCreatedEvent),
     #[serde(rename = "conversation.item.input_audio_transcription.completed")]
     ConversationItemInputAudioTranscriptionCompleted(ConversationItemInputAudioTranscriptionCompletedEvent),
-    #[serde(rename = "conversation.item.input_audio_transcriptoin.delta")]
+    #[serde(rename = "conversation.item.input_audio_transcription.delta")]
     ConversationItemInputAudioTranscriptionDelta(ConversationItemInputAudioTranscriptionDelta),
     #[serde(rename = "conversation.item.input_audio_transcription.failed")]
     ConversationItemInputAudioTranscriptionFailed(ConversationItemInputAudioTranscriptionFailedEvent),
