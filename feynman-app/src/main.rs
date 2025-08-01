@@ -29,6 +29,7 @@ pub enum Input {
     Initialized(),
     AISpeaking(),
     AISpeakingDone(),
+    CreateConversationItem(openai_realtime::types::Item),
 }
 
 
@@ -282,9 +283,6 @@ async fn main() {
                     if awaiting_item_creation {
                         let item_id = data.item().id().to_string();
                         pending_interrupts.insert(item_id);
-                        if let Err(e) = realtime_api.create_response().await {
-                            eprintln!("Error creating response: {:?}", e);
-                        }
                         awaiting_item_creation = false; // <-- Reset the flag
                     }
                 }
@@ -341,9 +339,8 @@ async fn main() {
                                 .with_role(openai_realtime::types::MessageRole::Assistant)
                                 .with_input_text(&analysis)
                                 .build();
-                            if let Err(e) = realtime_api.create_conversation_item(openai_realtime::types::Item::Message(message)).await {
-                                eprintln!("Error creating conversation item: {:?}", e);
-                                continue;
+                            if let Err(e) = client_ctrl2.try_send(Input::CreateConversationItem(openai_realtime::types::Item::Message(message))) {
+                                eprintln!("Failed to send CreateConversationItem to client: {:?}", e);
                             }
                             // Set the flag to wait for ConversationItemCreated event
                             awaiting_item_creation = true;
@@ -467,10 +464,15 @@ async fn main() {
 
                     }
                 }
-            }
 
+                Input::CreateConversationItem(item) => {
+                if let Err(e) = realtime_api.create_conversation_item(item).await {
+                    eprintln!("Error creating conversation item: {:?}", e);
+                }
+                }
+            }
         }
-    });
+     });
 
     tokio::select! {
         _ = post_process => {},
