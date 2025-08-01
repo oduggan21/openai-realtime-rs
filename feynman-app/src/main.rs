@@ -1,4 +1,5 @@
-use std::collections::VecDeque;
+use std::collections::{VecDeque, HashSet};
+use serde::Deserialize;
 use cpal::{FrameCount, StreamConfig};
 use cpal::traits::{DeviceTrait, StreamTrait};
 use ringbuf::{
@@ -11,7 +12,12 @@ use openai_realtime::types::audio::Base64EncodedAudioBytes;
 use openai_realtime::utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
 use openai_realtime::utils as utils;
 
-mod analyzer;
+mod topic;
+mod reviewer;
+
+use topic::{TopicBuffer, TopicChange};
+use reviewer::ReviewerClient;
+
 
 const INPUT_CHUNK_SIZE: usize = 1024;
 const OUTPUT_CHUNK_SIZE: usize = 1024;
@@ -25,10 +31,17 @@ pub enum Input {
     AISpeakingDone(),
 }
 
+
 #[tokio::main]
 async fn main() {
     //load the environment variables
     dotenvy::dotenv_override().ok();
+    let api_key = std::env::var("OPENAI_API_KEY").expect("key not set");
+    let model = "gpt-4o".to_string();
+    let reviewer = ReviewerClient::new(api_key, model);
+    let reviewer = std::sync::Arc::new(reviewer);
+
+
     
     //create tracing subcsriber to tracking debug statements with timestamps
     tracing_subscriber::fmt()
@@ -234,7 +247,18 @@ async fn main() {
     let client_ctrl2 = input_tx.clone();
     //create a server events subscriber, subscribing to the server transmitter
     let mut server_events = realtime_api.server_events().await.expect("failed to get server events");
+    let reviewer2 = reviewer.clone();
+
     let server_handle = tokio::spawn(async move {
+        //hold the current topic and its segments with topic buffer
+        let mut current_topic = TopicBuffer {topic: String::new(), segments: Vec::new()};
+        //hold past topics in a vector of topic buffers
+        let mut past_topics: Vec<TopicBuffer> = Vec::new();
+        //hold item id's of created interrupts as to only play those ones
+        let mut pending_interrupts: HashSet<String> = Default::default();
+        // Add this flag for awaiting item creation
+        let mut awaiting_item_creation = false;
+
         //recieve events
         while let Ok(e) = server_events.recv().await {
             // println!("server_events: {:?}", &e);
@@ -254,9 +278,16 @@ async fn main() {
                         eprintln!("Failed to send initialized event to client: {:?}", e);
                     }
                 }
-                // openai_realtime::types::events::ServerEvent::ConversationItemCreated(data) => {
-                //     println!("conversation item created: {:?}", data.item());
-                // }
+                openai_realtime::types::events::ServerEvent::ConversationItemCreated(data) => {
+                    if awaiting_item_creation {
+                        let item_id = data.item().id().to_string();
+                        pending_interrupts.insert(item_id);
+                        if let Err(e) = realtime_api.create_response().await {
+                            eprintln!("Error creating response: {:?}", e);
+                        }
+                        awaiting_item_creation = false; // <-- Reset the flag
+                    }
+                }
                 openai_realtime::types::events::ServerEvent::InputAudioBufferSpeechStarted(data) => {
                     println!("speech started: {:?}", data);
                 }
@@ -264,12 +295,75 @@ async fn main() {
                     println!("speech stopped: {:?}", data);
                 }
                 openai_realtime::types::events::ServerEvent::ConversationItemInputAudioTranscriptionCompleted(data ) => {
-                    println!("Human: {:?}, e:{:?} i:{:?}", data.transcript().trim(), data.event_id(), data.item_id());
+                    let segment = data.transcript().trim().to_owned();
+
+                    current_topic.segments.push(segment.clone());
+
+                    let (topic_change, new_topic) = {
+                        let context = current_topic.segments.join(" ");
+                        
+                        let response = match reviewer2
+                            .looks_like_topic_change(&context, &segment)
+                            .await
+                        {
+                            Ok(r) => r,
+                            Err(e) => {
+                                eprintln!("Error in looks_like_topic_change: {:?}", e);
+                                continue;
+                            }
+                        };
+                        let result: TopicChange = match serde_json::from_str(&response) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                eprintln!("Error parsing TopicChange: {:?}", e);
+                                continue;
+                            }
+                        };
+                        (result.topic_change, result.new_topic)
+                    };
+
+                    if topic_change {
+                        // Analyze the buffered topic with ReviewerClient
+                        let analysis = match reviewer2
+                            .analyze_topic(&current_topic.segments.join(" "), &current_topic.topic)
+                            .await
+                        {
+                            Ok(a) => a,
+                            Err(e) => {
+                                eprintln!("Error in analyze_topic: {:?}", e);
+                                continue;
+                            }
+                        };
+
+                        if analysis != "OK" {
+                            // This is where you send the AI question interrupt
+                            let message = openai_realtime::types::MessageItem::builder()
+                                .with_role(openai_realtime::types::MessageRole::Assistant)
+                                .with_input_text(&analysis)
+                                .build();
+                            if let Err(e) = realtime_api.create_conversation_item(openai_realtime::types::Item::Message(message)).await {
+                                eprintln!("Error creating conversation item: {:?}", e);
+                                continue;
+                            }
+                            // Set the flag to wait for ConversationItemCreated event
+                            awaiting_item_creation = true;
+                        }
+
+                        // Save current topic buffer and start a new one
+                        past_topics.push(current_topic);
+                        current_topic = TopicBuffer {
+                            topic: new_topic.unwrap_or_default(),
+                            segments: vec![segment],
+                        };
+                    }
                 }
                 //if we get response audio send it to the post channel
                 openai_realtime::types::events::ServerEvent::ResponseAudioDelta(data) => {
-                    if let Err(e) = post_tx.send(data.delta().to_string()).await {
-                        eprintln!("Failed to send audio data to resampler: {:?}", e);
+                    let item_id = data.item_id();
+                    if pending_interrupts.contains(item_id){
+                        if let Err(e) = post_tx.send(data.delta().to_string()).await {
+                            eprintln!("Failed to send audio data to resampler: {:?}", e);
+                        }
                     }
                 }
                 // openai_realtime::types::events::ServerEvent::ResponseTextDone(data) => {
