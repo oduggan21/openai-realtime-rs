@@ -310,9 +310,20 @@ async fn main() {
                                 continue;
                             }
                         };
-                        let result: TopicChange = match serde_json::from_str(&response) {
+
+                        let response_json = response
+                            .trim()
+                            .trim_start_matches("```json")
+                            .trim_start_matches("```")
+                            .trim_end_matches("```")
+                            .trim();
+
+                        // Print for debug
+                        println!("TopicChange response (stripped): {:?}", response_json);
+                        let result: TopicChange = match serde_json::from_str(&response_json) {
                             Ok(r) => r,
                             Err(e) => {
+                                println!("TopicChange response: {:?}", response_json);
                                 eprintln!("Error parsing TopicChange: {:?}", e);
                                 continue;
                             }
@@ -468,6 +479,9 @@ async fn main() {
                 Input::CreateConversationItem(item) => {
                 if let Err(e) = realtime_api.create_conversation_item(item).await {
                     eprintln!("Error creating conversation item: {:?}", e);
+                }
+                if let Err(e) = realtime_api.create_response().await{
+                    eprintln!("Error creating response for conversation item");
                 }
                 }
             }
