@@ -5,15 +5,18 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use ringbuf::{
     traits::{Consumer, Producer, Split},
 };
+
 use rubato::Resampler;
 use tracing::Level;
 use tracing_subscriber::fmt::time::ChronoLocal;
 use openai_realtime::types::audio::Base64EncodedAudioBytes;
 use openai_realtime::utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
 use openai_realtime::utils as utils;
+use openai_realtime::types::audio::{TurnDetection, ServerVadTurnDetection};
 
 mod topic;
 mod reviewer;
+
 
 use topic::{TopicBuffer, TopicChange};
 use reviewer::ReviewerClient;
@@ -420,12 +423,15 @@ async fn main() {
         while let Some(i) = input_rx.recv().await {
             match i {
                 Input::Initialize() => {
+
+                    let turn_detection = TurnDetection::ServerVad(ServerVadTurnDetection::default().with_interrupt_response(true).with_create_response(false));
                     //once a connection has be established update the session with the custom parameters
                     println!("initializing...");
                     let session = openai_realtime::types::Session::new()
                         .with_modalities_enable_audio()
                         .with_voice(openai_realtime::types::audio::Voice::Alloy)
                         .with_input_audio_transcription_enable(openai_realtime::types::audio::TranscriptionModel::Whisper)
+                        .with_turn_detection_enable(turn_detection)
                         .build();
                     println!("session config: {:?}", serde_json::to_string(&session).unwrap());
                     realtime_api.update_session(session).await.expect("failed to init session");
