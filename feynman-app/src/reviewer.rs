@@ -101,7 +101,36 @@ Remember: Be smart and curious, but you have no prior knowledge beyond what is i
             .ok_or_else(|| anyhow::anyhow!("No response from LLM"))?
             .message
             .content;
+   
+        Ok(answer.trim().to_string())
+    }
 
+    pub async fn extract_topic(&self, segment: &str) -> anyhow::Result<String> {
+        let prompt = format!(
+            "Given this segment:\n\"{segment}\"\nWhat is the main concept or topic being explained? Respond ONLY with the name of the topic as a string."
+        );
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        });
+
+        let resp = self.client
+            .post("https://api.openai.com/v1/chat/completions")
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await?
+            .json::<LlmResponse>()
+            .await?;
+
+        let answer = &resp.choices.get(0)
+            .ok_or_else(|| anyhow::anyhow!("No response from LLM"))?
+            .message.content;
         Ok(answer.trim().to_string())
     }
 }
