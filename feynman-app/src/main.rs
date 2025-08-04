@@ -17,10 +17,12 @@ use openai_realtime::types::audio::{TurnDetection, ServerVadTurnDetection};
 
 mod topic;
 mod reviewer;
+mod sessionState;
 
 
-use topic::{TopicBuffer, TopicChange, Topic};
-use reviewer::{ReviewerClient, AnalysisOut, SubTopic, SubTopicList};
+use topic::{TopicBuffer, TopicChange, Topic, SubTopic, SubTopicList};
+use reviewer::{ReviewerClient, AnalysisOut};
+use sessionState::{FeynmanState, FeynmanSession};
 
 
 const INPUT_CHUNK_SIZE: usize = 1024;
@@ -280,14 +282,12 @@ async fn main() {
     let reviewer2 = reviewer.clone();
 
     let server_handle = tokio::spawn(async move {
-        //hold the current topic and its segments with topic buffer
-        let mut current_topic = TopicBuffer {topic: String::new(), segments: Vec::new()};
-        //hold past topics in a vector of topic buffers
-        let mut past_topics: Vec<TopicBuffer> = Vec::new();
-        //hold item id's of created interrupts as to only play those ones
+       
         let mut pending_interrupts: HashSet<String> = Default::default();
         // Add this flag for awaiting item creation
         let mut awaiting_item_creation = false;
+
+        let mut session = FeynmanSession::new();
 
         //recieve events
         while let Ok(e) = server_events.recv().await {
@@ -323,134 +323,12 @@ async fn main() {
                 }
                 openai_realtime::types::events::ServerEvent::ConversationItemInputAudioTranscriptionCompleted(data ) => {
                     let segment = data.transcript().trim().to_owned();
-
-                    current_topic.segments.push(segment.clone());
-
-                    if current_topic.topic.is_empty() {
-                        let extracted_topic = match reviewer2.extract_topic(&segment).await {
-                            Ok(t) => t,
-                            Err(e) => {
-                                eprintln!("Error extracting topic: {:?}", e);
-                                continue;
-                            }
-                        };
-                        current_topic.topic = extracted_topic;
-                    }
-
-                    let (topic_change, new_topic) = {
-                        let context = current_topic.segments.join(" ");
-                        
-                        let response = match reviewer2
-                            .looks_like_topic_change(&context, &segment)
-                            .await
-                        {
-                            Ok(r) => r,
-                            Err(e) => {
-                                eprintln!("Error in looks_like_topic_change: {:?}", e);
-                                continue;
-                            }
-                        };
-
-                        let response_json = response
-                            .trim()
-                            .trim_start_matches("```json")
-                            .trim_start_matches("```")
-                            .trim_end_matches("```")
-                            .trim();
-
+                    session.handle_segment(segment);
                     
-                        let result: TopicChange = match serde_json::from_str(&response_json) {
-                            Ok(r) => r,
-                            Err(e) => {
-                                println!("TopicChange response: {:?}", response_json);
-                                eprintln!("Error parsing TopicChange: {:?}", e);
-                                continue;
-                            }
-                        };
-
-                        if result.topic_change {
-                            println!("Topic changed! Old topic: {:?}, New topic: {:?}", current_topic.topic, result.new_topic);
-                        }
-                        (result.topic_change, result.new_topic)
-                    };
-
-                    if topic_change {
-                        // Analyze the buffered topic with ReviewerClient
-                        let raw = match reviewer2
-                            .analyze_topic(&current_topic.segments.join(" "), &current_topic.topic)
-                            .await
-                        {
-                            Ok(a) => {
-                                println!("analyze_topic raw: {}", a);
-                                a
-                            }
-                            Err(e) => {
-                                eprintln!("Error in analyze_topic: {:?}", e);
-                                continue;
-                            }
-                        };
-
-                        // NEW: parse structured JSON
-                        let parsed: AnalysisOut = match serde_json::from_str(&raw) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                eprintln!("analyze_topic JSON parse error: {:?} | raw={}", e, raw);
-                                // Fallback: if legacy "OK", do nothing; else forward as-is
-                                if raw.trim() != "OK" && !raw.trim().is_empty() {
-                                    let message = openai_realtime::types::MessageItem::builder()
-                                        .with_role(openai_realtime::types::MessageRole::Assistant)
-                                        .with_input_text(&raw)
-                                        .build();
-                                    if let Err(e) = client_ctrl2.try_send(
-                                        Input::CreateConversationItem(openai_realtime::types::Item::Message(message))
-                                    ) {
-                                        eprintln!("Failed to send fallback message: {:?}", e);
-                                    }
-                                    awaiting_item_creation = true;
-                                }
-                                // proceed to start new topic buffer
-                                past_topics.push(current_topic);
-                                current_topic = TopicBuffer {
-                                    topic: new_topic.unwrap_or_default(),
-                                    segments: vec![segment],
-                                };
-                                continue;
-                            }
-                        };
-
-                        // Route by status
-                        match parsed.status.as_str() {
-                            "ok" => { /* no interrupt */ }
-                            "clarify_term" | "ask" => {
-                                if !parsed.questions.is_empty() {
-                                    // Send one message containing 1–2 lines; realtime agent will ask them one-by-one
-                                    let payload = parsed.questions.join("\n");
-                                    let message = openai_realtime::types::MessageItem::builder()
-                                        .with_role(openai_realtime::types::MessageRole::Assistant)
-                                        .with_input_text(&payload)
-                                        .build();
-                                    if let Err(e) = client_ctrl2.try_send(
-                                        Input::CreateConversationItem(openai_realtime::types::Item::Message(message))
-                                    ) {
-                                        eprintln!("Failed to send CreateConversationItem: {:?}", e);
-                                    } else {
-                                        awaiting_item_creation = true;
-                                    }
-                                }
-                            }
-                            other => {
-                                eprintln!("Unexpected analyze_topic status: {}", other);
-                            }
-                        }
-
-                        // Save current topic buffer and start a new one
-                        past_topics.push(current_topic);
-                        current_topic = TopicBuffer {
-                            topic: new_topic.unwrap_or_default(),
-                            segments: vec![segment],
-                        };
-                    }
+                    
+                    
                 }
+                
                 //if we get response audio send it to the post channel
                 openai_realtime::types::events::ServerEvent::ResponseAudioDelta(data) => {
            
