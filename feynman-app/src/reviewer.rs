@@ -213,6 +213,7 @@ mod tests {
     // This test will run only if you have a valid API key in your environment
     #[tokio::test]
     async fn test_generate_subtopics_for_os() {
+        dotenvy::dotenv_override().ok(); 
         let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
         let model = "gpt-4o".to_string();
         let reviewer = ReviewerClient::new(api_key, model);

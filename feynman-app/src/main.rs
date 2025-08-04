@@ -20,7 +20,7 @@ mod reviewer;
 
 
 use topic::{TopicBuffer, TopicChange, Topic};
-use reviewer::{ReviewerClient, AnalysisOut};
+use reviewer::{ReviewerClient, AnalysisOut, SubTopic, SubTopicList};
 
 
 const INPUT_CHUNK_SIZE: usize = 1024;
@@ -228,8 +228,15 @@ async fn main() {
         main_topic: args.topic,
     };
 
-    
-
+    let subtopic_names = match reviewer.generate_subtopics(&topic.main_topic).await {
+        Ok(names) => names,
+        Err(e) => {
+            eprintln!("Error generating subtopics: {:?}", e);
+            return;
+        }
+    };
+    let subtopics: Vec<SubTopic> = subtopic_names.into_iter().map(SubTopic::new).collect();
+    let subtopic_list = SubTopicList::new(subtopics);
 
 
 
