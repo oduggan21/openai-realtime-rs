@@ -22,6 +22,12 @@ pub struct ReviewerClient {
     model: String,
 }
 
+#[derive(serde::Deserialize, Debug)]
+pub struct AnalysisOut {
+    pub status: String,                // "ok" | "ask" | "clarify_term"
+    pub questions: Vec<String>,        // 0..=2
+}
+
 impl ReviewerClient {
     pub fn new(api_key: String, model: String) -> Self {
         Self {
@@ -62,27 +68,50 @@ impl ReviewerClient {
 
     pub async fn analyze_topic(&self, context: &str, concept: &str) -> anyhow::Result<String> {
         let prompt = format!(
-            r#"You are a student learning about the concept of "{concept}" for the first time. Below is an explanation provided by your teacher as part of the Feynman technique:
+                        r#"You are a smart beginner in a Feynman-technique session learning "{concept}".
+                    Act ONLY as the student. Use ONLY the teacher text. Do NOT teach or speculate.
 
----
-{context}
----
+                    Goal: help the teacher find gaps that would block correct use/explanation.
 
-Your job is to carefully analyze this explanation. If everything is clearly and thoroughly explained, reply with "OK" and nothing else.
+                    Checklist (mentally verify from the text; do not output this list):
+                    1) Definition/scope clear?
+                    2) Purpose/goal clear?
+                    3) Inputs/assumptions/prerequisites stated?
+                    4) Decision criteria (when to choose X vs Y) present?
+                    5) Core steps/mechanics described?
+                    6) Exceptions/edge cases covered?
+                    7) Failure outcomes and what happens then?
+                    8) Terms/symbols/numbers defined in-context?
 
-If something is missing, unclear, or only partially explained, ask one or more specific follow-up questions to clarify your understanding. Do not ask questions if the explanation is already complete and clear.
+                    Question rules:
+                    - Ask ≤2 questions targeting the BIGGEST blockers from the checklist.
+                    - Make them concrete and actionable (decisions, edge cases, preconditions, failure outcomes).
+                    - Avoid trivia, history, “why is constant = X”, or design speculation.
+                    - If any term/symbol/number is undefined/unclear, FIRST ask ONE clarification quoting it exactly and STOP. Do NOT guess meaning.
 
-Remember: Be smart and curious, but you have no prior knowledge beyond what is in the explanation."#
-        );
+                    Output (STRICT):
+                    - JSON ONLY (no prose, no markdown) exactly matching:
+                    {{ "status": "ok" | "ask" | "clarify_term", "questions": ["..."] }}
+                    - If "ok": questions = [].
+                    - If "clarify_term": exactly one clarification question.
+                    - If "ask": one or two practical questions, each ≤ 18 words.
+
+                    Teacher text:
+                    ---
+                    {context}
+                    ---"#,
+                        concept = concept,
+                        context = context
+                    );
+
 
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
+                { "role": "user", "content": prompt }
+            ],
+            "response_format": { "type": "json_object" },
+            "temperature": 0.2
         });
 
         let resp = self
@@ -132,5 +161,75 @@ Remember: Be smart and curious, but you have no prior knowledge beyond what is i
             .ok_or_else(|| anyhow::anyhow!("No response from LLM"))?
             .message.content;
         Ok(answer.trim().to_string())
+    }
+    pub async fn generate_subtopics(&self, topic: &str) -> anyhow::Result<Vec<String>> {
+    let prompt = format!(
+        "List all the key subtopics and concepts someone should cover to thoroughly teach the topic \"{topic}\" to a beginner. \
+        Respond ONLY as a numbered list of subtopic names (no explanations)."
+    );
+    let body = serde_json::json!({
+        "model": self.model,
+        "messages": [
+            { "role": "user", "content": prompt }
+        ]
+    });
+
+    let resp = self.client
+        .post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(&self.api_key)
+        .json(&body)
+        .send()
+        .await?
+        .json::<LlmResponse>()
+        .await?;
+
+    let answer = &resp.choices.get(0)
+        .ok_or_else(|| anyhow::anyhow!("No response from LLM"))?
+        .message.content;
+
+    // Parse numbered list, extract subtopic names
+    let subtopics: Vec<String> = answer
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if let Some(idx) = line.find('.') {
+                Some(line[idx + 1..].trim().to_string())
+            } else {
+                None
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    Ok(subtopics)
+}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    // This test will run only if you have a valid API key in your environment
+    #[tokio::test]
+    async fn test_generate_subtopics_for_os() {
+        let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
+        let model = "gpt-4o".to_string();
+        let reviewer = ReviewerClient::new(api_key, model);
+
+        // Try generating subtopics for "Operating Systems"
+        let topic = "Operating Systems";
+        let result = reviewer.generate_subtopics(topic).await;
+
+        match result {
+            Ok(subtopics) => {
+                println!("Subtopics: {:?}", subtopics);
+                // You can also assert something about the output, like minimum length
+                assert!(subtopics.len() > 3, "Should return at least 3 subtopics");
+            }
+            Err(e) => {
+                panic!("generate_subtopics failed: {:?}", e);
+            }
+        }
     }
 }
