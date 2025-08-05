@@ -323,11 +323,7 @@ async fn main() {
                 }
                 openai_realtime::types::events::ServerEvent::ConversationItemInputAudioTranscriptionCompleted(data ) => {
                     let segment = data.transcript().trim().to_owned();
-                    session.handle_segment(segment);
-                    
-                    
-
-                    
+                   
                 }
                 
                 //if we get response audio send it to the post channel

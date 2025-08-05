@@ -123,8 +123,21 @@ impl ReviewerClient {
         .ok_or_else(|| anyhow::anyhow!("No response from LLM"))?
         .message
         .content;
+    let json_val: serde_json::Value = serde_json::from_str(answer)
+    .map_err(|e| anyhow::anyhow!("Failed to parse LLM response: {e}"))?;
 
-    Ok(answer.trim().to_string())
+    // If the output is an object, wrap it in an array.
+    let normalized = if json_val.is_array() {
+        answer.trim().to_string()
+    } else if json_val.is_object() {
+        format!("[{}]", answer.trim())
+    } else {
+        // Unexpected format
+        return Err(anyhow::anyhow!("LLM output is not an object or array: {}", answer));
+    };
+
+    Ok(normalized)
+  
 }
     pub async fn check_answer_satisfies_question(&self, segment: &str, question: &str,) -> anyhow::Result<bool> {
     let prompt = format!(
@@ -217,6 +230,11 @@ impl ReviewerClient {
 }
 
 pub async fn analyze_last_explained_context(&self, segment: &str, main_topic: &str, subtopic_list: &[String],) -> anyhow::Result<String> {
+    // If segment is blank, nudge user to continue
+    if segment.trim().is_empty() {
+        return Ok("You can continue explaining any part of the topic you'd like. Please keep going!".to_string());
+    }
+    
     let subtopics = subtopic_list.join(", ");
     let prompt = format!(
         r#"
@@ -271,6 +289,7 @@ pub async fn analyze_last_explained_context(&self, segment: &str, main_topic: &s
 mod tests {
     use super::*;
     use std::env;
+    use crate::topic::SubTopic;
 
     // This test will run only if you have a valid API key in your environment
     #[tokio::test]
@@ -292,6 +311,39 @@ mod tests {
             }
             Err(e) => {
                 panic!("generate_subtopics failed: {:?}", e);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_analyze_topic_basic() {
+        dotenvy::dotenv_override().ok(); 
+        let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
+        let model = "gpt-4o".to_string();
+        let reviewer = ReviewerClient::new(api_key, model);
+
+        // Prepare a simple segment and subtopics
+        let segment = "TCP/IP is a set of networking protocols. For example, the Internet uses TCP/IP.";
+        let subtopics = vec![
+            SubTopic::new("TCP/IP".to_string()),
+            SubTopic::new("Internet".to_string()),
+        ];
+
+        let result = reviewer.analyze_topic(segment, &subtopics).await;
+
+        match result {
+            Ok(json) => {
+                println!("Analysis JSON: {}", json);
+                // Try to parse the JSON to check format
+                let parsed: serde_json::Value = serde_json::from_str(&json)
+                    .expect("Should return valid JSON");
+                assert!(parsed.is_array(), "Output should be a JSON array");
+                // Optionally, check each subtopic is present
+                let arr = parsed.as_array().unwrap();
+                assert!(arr.iter().any(|obj| obj.get("subtopic").unwrap() == "TCP/IP"), "TCP/IP should be in result");
+            }
+            Err(e) => {
+                panic!("analyze_topic failed: {:?}", e);
             }
         }
     }
