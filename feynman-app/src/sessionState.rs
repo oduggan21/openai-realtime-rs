@@ -1,3 +1,5 @@
+use crate::topic::{SubTopic, SubTopicList};
+use std::collections::HashMap;
 #[derive(Debug)]
 pub enum FeynmanState {
     Listening,
@@ -7,22 +9,18 @@ pub enum FeynmanState {
 }
 
 pub struct FeynmanSession {
-    pub state: FeynmanState,
-    // Segments currently awaiting analysis,
-    // can be a single segment, or in-between context
-    pub in_between_buffer: Vec<String>,
-    // Answer segments for questions
-    pub answer_buffer: Vec<String>,
-    // Temp buffer for "where did you leave off" context
-    pub temp_context_buffer: Vec<String>,
-    // Questions currently being asked
-    pub question_queue: Vec<String>,
-    // Index of current question
-    pub current_question_idx: usize,
+    state: FeynmanState,
+    in_between_buffer: Vec<String>,
+    answer_buffer: Vec<String>,
+    temp_context_buffer: Vec<String>,
+    question_queue: Vec<String>,
+    current_question_idx: usize,
+    pending_no_subtopic_segment: Option<String>,
+    subtopic_list: SubTopicList,
+    covered_subtopics: HashMap<String, SubTopic>,
 }
-
 impl FeynmanSession {
-    pub fn new() -> Self {
+    pub fn new(subtopic_list: SubTopicList) -> Self {
         Self {
             state: FeynmanState::Listening,
             in_between_buffer: vec![],
@@ -30,6 +28,9 @@ impl FeynmanSession {
             temp_context_buffer: vec![],
             question_queue: vec![],
             current_question_idx: 0,
+            pending_no_subtopic_segment: None,
+            subtopic_list,
+            covered_subtopics: HashMap::new(), 
         }
     }
 

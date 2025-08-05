@@ -1,5 +1,6 @@
 use reqwest::Client;
 use serde::Deserialize;
+use crate::topic::SubTopic;
 
 #[derive(Debug, Deserialize)]
 pub struct LlmResponse {
@@ -66,102 +67,113 @@ impl ReviewerClient {
         Ok(answer.clone())
     }
 
-    pub async fn analyze_topic(&self, context: &str, concept: &str) -> anyhow::Result<String> {
-        let prompt = format!(
-                        r#"You are a smart beginner in a Feynman-technique session learning "{concept}".
-                    Act ONLY as the student. Use ONLY the teacher text. Do NOT teach or speculate.
+    pub async fn analyze_topic(&self, segment: &str, detected_subtopics: &[SubTopic]) -> anyhow::Result<String> {
+    let subtopic_names = detected_subtopics.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ");
 
-                    Goal: help the teacher find gaps that would block correct use/explanation.
+    let prompt = format!(r#"
+            You are a smart beginner in a Feynman-technique session. Analyze the following teacher segment for coverage of the subtopics: [{subtopic_names}].
 
-                    Checklist (mentally verify from the text; do not output this list):
-                    1) Definition/scope clear?
-                    2) Purpose/goal clear?
-                    3) Inputs/assumptions/prerequisites stated?
-                    4) Decision criteria (when to choose X vs Y) present?
-                    5) Core steps/mechanics described?
-                    6) Exceptions/edge cases covered?
-                    7) Failure outcomes and what happens then?
-                    8) Terms/symbols/numbers defined in-context?
+            For EACH subtopic, answer:
+            - Does the segment provide a clear definition for it? (true/false)
+            - Does it explain its mechanism or how it works? (true/false)
+            - Does it provide a concrete example? (true/false)
 
-                    Question rules:
-                    - Ask ≤2 questions targeting the BIGGEST blockers from the checklist.
-                    - Make them concrete and actionable (decisions, edge cases, preconditions, failure outcomes).
-                    - Avoid trivia, history, “why is constant = X”, or design speculation.
-                    - If any term/symbol/number is undefined/unclear, FIRST ask ONE clarification quoting it exactly and STOP. Do NOT guess meaning.
+            If a field is missing, write a short clarifying question that would help the teacher fill the gap.
 
-                    Output (STRICT):
-                    - JSON ONLY (no prose, no markdown) exactly matching:
-                    {{ "status": "ok" | "ask" | "clarify_term", "questions": ["..."] }}
-                    - If "ok": questions = [].
-                    - If "clarify_term": exactly one clarification question.
-                    - If "ask": one or two practical questions, each ≤ 18 words.
-
-                    Teacher text:
-                    ---
-                    {context}
-                    ---"#,
-                        concept = concept,
-                        context = context
-                    );
-
-
-        let body = serde_json::json!({
-            "model": self.model,
-            "messages": [
-                { "role": "user", "content": prompt }
-            ],
-            "response_format": { "type": "json_object" },
-            "temperature": 0.2
-        });
-
-        let resp = self
-            .client
-            .post("https://api.openai.com/v1/chat/completions")
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await?
-            .json::<LlmResponse>()
-            .await?;
-
-        let answer = &resp
-            .choices
-            .get(0)
-            .ok_or_else(|| anyhow::anyhow!("No response from LLM"))?
-            .message
-            .content;
-   
-        Ok(answer.trim().to_string())
-    }
-
-    pub async fn extract_topic(&self, segment: &str) -> anyhow::Result<String> {
-        let prompt = format!(
-            "Given this segment:\n\"{segment}\"\nWhat is the main concept or topic being explained? Respond ONLY with the name of the topic as a string."
-        );
-        let body = serde_json::json!({
-            "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
+            Output STRICT JSON array of objects (one per subtopic):
+            [
+            {{
+                "subtopic": "<name>",
+                "has_definition": <true|false>,
+                "has_mechanism": <true|false>,
+                "has_example": <true|false>,
+                "questions": ["..."] // 0 or more, one for each missing field
+            }},
+            ...
             ]
-        });
 
-        let resp = self.client
-            .post("https://api.openai.com/v1/chat/completions")
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await?
-            .json::<LlmResponse>()
-            .await?;
+            Teacher segment:
+            ---
+            {segment}
+            ---
+            "#);
 
-        let answer = &resp.choices.get(0)
-            .ok_or_else(|| anyhow::anyhow!("No response from LLM"))?
-            .message.content;
-        Ok(answer.trim().to_string())
-    }
+    let body = serde_json::json!({
+        "model": self.model,
+        "messages": [
+            { "role": "user", "content": prompt }
+        ],
+        "response_format": { "type": "json_object" },
+        "temperature": 0.2
+    });
+
+    let resp = self
+        .client
+        .post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(&self.api_key)
+        .json(&body)
+        .send()
+        .await?
+        .json::<LlmResponse>()
+        .await?;
+
+    let answer = &resp
+        .choices
+        .get(0)
+        .ok_or_else(|| anyhow::anyhow!("No response from LLM"))?
+        .message
+        .content;
+
+    Ok(answer.trim().to_string())
+}
+    pub async fn check_answer_satisfies_question(&self, segment: &str, question: &str,) -> anyhow::Result<bool> {
+    let prompt = format!(
+        r#"Given the following teacher answer segment:
+            ---
+            {segment}
+            ---
+            and the question:
+            "{question}"
+
+            Does the answer segment satisfactorily answer the question? Respond STRICTLY as a JSON object:
+            {{"satisfies": true|false }}
+
+            Do NOT add any explanation, just the JSON."#
+                );
+
+            let body = serde_json::json!({
+                "model": self.model,
+                "messages": [
+                    { "role": "user", "content": prompt }
+                ],
+                "response_format": { "type": "json_object" },
+                "temperature": 0.0 // be as deterministic as possible
+            });
+
+            let resp = self
+                .client
+                .post("https://api.openai.com/v1/chat/completions")
+                .bearer_auth(&self.api_key)
+                .json(&body)
+                .send()
+                .await?
+                .json::<LlmResponse>()
+                .await?;
+
+            let answer = &resp
+                .choices
+                .get(0)
+                .ok_or_else(|| anyhow::anyhow!("No response from LLM"))?
+                .message
+                .content;
+
+            // Parse the JSON, expecting {"satisfies": true/false}
+            let result: serde_json::Value = serde_json::from_str(answer)?;
+            let satisfies = result.get("satisfies").and_then(|v| v.as_bool())
+                .ok_or_else(|| anyhow::anyhow!("Invalid LLM answer format: {}", answer))?;
+
+            Ok(satisfies)
+}
     pub async fn generate_subtopics(&self, topic: &str) -> anyhow::Result<Vec<String>> {
     let prompt = format!(
         "List all the key subtopics and concepts someone should cover to thoroughly teach the topic \"{topic}\" to a beginner. \
@@ -200,7 +212,7 @@ impl ReviewerClient {
         })
         .filter(|s| !s.is_empty())
         .collect();
-
+ 
     Ok(subtopics)
 }
 }

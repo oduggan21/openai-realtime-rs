@@ -287,7 +287,7 @@ async fn main() {
         // Add this flag for awaiting item creation
         let mut awaiting_item_creation = false;
 
-        let mut session = FeynmanSession::new();
+        let mut session = FeynmanSession::new(subtopic_list);
 
         //recieve events
         while let Ok(e) = server_events.recv().await {
@@ -326,6 +326,7 @@ async fn main() {
                     session.handle_segment(segment);
                     
                     
+
                     
                 }
                 
