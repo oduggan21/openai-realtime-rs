@@ -215,6 +215,56 @@ impl ReviewerClient {
  
     Ok(subtopics)
 }
+
+pub async fn analyze_last_explained_context(&self, segment: &str, main_topic: &str, subtopic_list: &[String],) -> anyhow::Result<String> {
+    let subtopics = subtopic_list.join(", ");
+    let prompt = format!(
+        r#"
+    You are a Feynman session assistant.
+    Given the teacher's latest segment:
+    ---
+    {segment}
+    ---
+    and the main topic: "{main_topic}"
+    and these subtopics: [{subtopics}]
+
+    Identify (in one short sentence) what subtopic or concept the teacher was last explaining, using ONLY the segment and subtopics.
+
+    Respond ONLY as a message to the teacher in this format:
+    "You last left off on [subtopic or context]. Please keep telling me more about it."
+
+    Do NOT add any explanation, only output the message.
+    "#);
+
+    let body = serde_json::json!({
+        "model": self.model,
+        "messages": [
+            { "role": "user", "content": prompt }
+        ],
+        "response_format": { "type": "text" }, // Text: not JSON, just message.
+        "temperature": 0.2
+    });
+
+    let resp = self
+        .client
+        .post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(&self.api_key)
+        .json(&body)
+        .send()
+        .await?
+        .json::<LlmResponse>()
+        .await?;
+
+    let answer = &resp
+        .choices
+        .get(0)
+        .ok_or_else(|| anyhow::anyhow!("No response from LLM"))?
+        .message
+        .content;
+
+    Ok(answer.trim().to_string())
+}
+
 }
 
 #[cfg(test)]
