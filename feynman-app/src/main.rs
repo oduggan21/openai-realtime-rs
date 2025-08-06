@@ -6,6 +6,7 @@ use ringbuf::{
     traits::{Consumer, Producer, Split},
 };
 use clap::Parser;
+use std::sync::{Arc, Mutex};
 
 use rubato::Resampler;
 use tracing::Level;
@@ -323,7 +324,7 @@ async fn main() {
                 }
                 openai_realtime::types::events::ServerEvent::ConversationItemInputAudioTranscriptionCompleted(data ) => {
                     let segment = data.transcript().trim().to_owned();
-                   
+                    FeynmanSession::process_segment(&mut session, &reviewer2, segment).await;
                 }
                 
                 //if we get response audio send it to the post channel
@@ -421,6 +422,7 @@ async fn main() {
                         println!("AI speaking done");
                     }
                     ai_speaking = false;
+
                 }
                 Input::Audio(audio) => {
                     if initialized && !ai_speaking {

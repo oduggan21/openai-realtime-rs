@@ -3,6 +3,13 @@ use std::collections::HashMap;
 use crate::reviewer::{ReviewerClient};
 use serde_json::Value;
 
+#[derive(Debug, Clone)]
+pub struct QuestionForSubtopic {
+    pub subtopic: String,
+    pub field: String,      // "has_definition" | "has_mechanism" | "has_example"
+    pub question: String,
+}
+
 #[derive(Debug)]
 pub enum FeynmanState {
     Listening,
@@ -16,7 +23,7 @@ pub struct FeynmanSession {
     pub in_between_buffer: Vec<String>,    // Segments that come in during analyzing/question delivery
     pub answer_buffer: Vec<String>,        // Segments that are answers to questions
     pub temp_context_buffer: Vec<String>,  // Context for "where you left off"
-    pub question_queue: Vec<String>,       // Questions to deliver
+    pub question_queue: Vec<QuestionForSubtopic>,       // Questions to deliver
     pub current_question_idx: usize,
     pub pending_segments: Vec<String>,     // Segments without subtopic (for later combination)
     pub pending_no_subtopic_segment: bool, // True if waiting for a subtopic segment
@@ -48,7 +55,7 @@ impl FeynmanSession {
     }
 
     //async function that takes a segment and the current session state and decides what to do from there
-    async fn process_segment(session: &mut FeynmanSession, reviewer: &ReviewerClient, segment: String,) {
+    pub async fn process_segment(session: &mut FeynmanSession, reviewer: &ReviewerClient, segment: String,) {
     match session.state {
         //in the listneing state we check if we have temp context from previous left over and add it to new segment
         FeynmanState::Listening => {
@@ -73,6 +80,12 @@ impl FeynmanSession {
             //if we are in an analyzing state and a segment comes in just buffer it
             // While analyzing, buffer incoming segments
             session.in_between_buffer.push(segment);
+        }
+        FeynmanState::DeliveringQuestions => {
+            session.in_between_buffer.push(segment)
+        }
+        FeynmanState::AnalyzingAnswers => {
+
         }
         // ...other states to be implemented later...
         _ => {}
@@ -109,56 +122,65 @@ fn process_analyzing<'a>(
 
             // Parse LLM output
             let analysis: Value = serde_json::from_str(&analysis_json).expect("Valid JSON");
-            let mut all_questions = Vec::new();
+            let mut question_queue: Vec<QuestionForSubtopic> = vec![];
             let mut incomplete_subtopics = Vec::new();
 
             if let Some(array) = analysis.as_array() {
-                for subtopic_result in array {
-                    let name = subtopic_result["subtopic"].as_str().unwrap_or_default().to_string();
-                    let has_def = subtopic_result["has_definition"].as_bool().unwrap_or(false);
-                    let has_mech = subtopic_result["has_mechanism"].as_bool().unwrap_or(false);
-                    let has_ex = subtopic_result["has_example"].as_bool().unwrap_or(false);
-                    let questions: Vec<String> = subtopic_result["questions"]
-                        .as_array()
-                        .unwrap_or(&vec![])
-                        .iter()
-                        .filter_map(|q| q.as_str().map(|s| s.to_string()))
-                        .collect();
+            for subtopic_result in array {
+                let name = subtopic_result["subtopic"].as_str().unwrap_or_default().to_string();
+                let has_def = subtopic_result["has_definition"].as_bool().unwrap_or(false);
+                let has_mech = subtopic_result["has_mechanism"].as_bool().unwrap_or(false);
+                let has_ex = subtopic_result["has_example"].as_bool().unwrap_or(false);
 
-                    // Update session.covered_subtopics if complete
-                    if has_def && has_mech && has_ex {
-                        session.covered_subtopics.insert(
-                            name.clone(),
-                            SubTopic {
-                                name: name.clone(),
-                                has_definition: has_def,
-                                has_mechanism: has_mech,
-                                has_example: has_ex,
-                            },
-                        );
-                    } else {
-                        incomplete_subtopics.push(name.clone());
-                        all_questions.extend(questions);
+                if has_def && has_mech && has_ex {
+                    session.covered_subtopics.insert(
+                        name.clone(),
+                        SubTopic {
+                            name: name.clone(),
+                            has_definition: has_def,
+                            has_mechanism: has_mech,
+                            has_example: has_ex,
+                        },
+                    );
+                } else {
+                    incomplete_subtopics.push(name.clone());
+                    // Now parse questions as objects, not strings!
+                    if let Some(questions_arr) = subtopic_result["questions"].as_array() {
+                        for q in questions_arr {
+                            let field = q.get("field")
+                                .and_then(|f| f.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let question = q.get("question")
+                                .and_then(|f| f.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            question_queue.push(QuestionForSubtopic {
+                                subtopic: name.clone(),
+                                field,
+                                question,
+                                    });
+                                }
+                            }
+                        }
                     }
                 }
-            }
-
-            if all_questions.is_empty() {
-                // All subtopics are complete
-                if let Some(next_segment) = session.in_between_buffer.pop() {
-                    Self::process_analyzing(session, reviewer, next_segment).await;
-                } else {
-                    session.state = FeynmanState::Listening;
-                }
+            if question_queue.is_empty() {
+            // All subtopics complete
+            if let Some(next_segment) = session.in_between_buffer.pop() {
+                Self::process_analyzing(session, reviewer, next_segment).await;
             } else {
-                // There are incomplete subtopics/questions: move to question delivery phase
-                session.state = FeynmanState::DeliveringQuestions;
-                session.question_queue = all_questions;
-                session.question_subtopics = incomplete_subtopics;
-                // Do NOT process more segments here.
+                session.state = FeynmanState::Listening;
             }
+        } else {
+            // There are incomplete subtopics/questions: move to question delivery phase
+            session.state = FeynmanState::DeliveringQuestions;
+            session.question_queue = question_queue;
+            session.question_subtopics = incomplete_subtopics;
+            // Do NOT process more segments here.
+        }
         }
     })
 }
     
-}
+}    
