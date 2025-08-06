@@ -283,6 +283,61 @@ pub async fn analyze_last_explained_context(&self, segment: &str, main_topic: &s
     Ok(answer.trim().to_string())
 }
 
+pub async fn analyze_answer(&self, question: &str, answer: &str) -> anyhow::Result<bool> {
+    let prompt = format!(
+        r#"You are evaluating a student's answer in a Feynman teaching session.
+
+Question: "{question}"
+
+Student's Answer: "{answer}"
+
+Is this answer correct and sufficiently complete for the question asked? 
+- The answer should demonstrate understanding of the concept
+- It doesn't need to be perfect, but should show the student grasps the main idea
+- Consider if a beginner would understand the concept from this explanation
+
+Respond STRICTLY as JSON:
+{{"correct": true|false}}
+
+Do NOT add any explanation, just the JSON."#
+    );
+
+    let body = serde_json::json!({
+        "model": self.model,
+        "messages": [
+            { "role": "user", "content": prompt }
+        ],
+        "response_format": { "type": "json_object" },
+        "temperature": 0.1 // Low temperature for consistent evaluation
+    });
+
+    let resp = self
+        .client
+        .post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(&self.api_key)
+        .json(&body)
+        .send()
+        .await?
+        .json::<LlmResponse>()
+        .await?;
+
+    let answer = &resp
+        .choices
+        .get(0)
+        .ok_or_else(|| anyhow::anyhow!("No response from LLM"))?
+        .message
+        .content;
+
+    // Parse the JSON, expecting {"correct": true/false}
+    let result: serde_json::Value = serde_json::from_str(answer)?;
+    let is_correct = result
+        .get("correct")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| anyhow::anyhow!("Invalid LLM answer format: {}", answer))?;
+
+    Ok(is_correct)
+}
+
 }
 
 #[cfg(test)]
@@ -379,4 +434,86 @@ mod tests {
             }
         }
     }
+
+    #[tokio::test]
+    async fn test_analyze_answer() {
+        dotenvy::dotenv_override().ok();
+        let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
+        let model = "gpt-4o".to_string();
+        let reviewer = ReviewerClient::new(api_key, model);
+
+        // Test case 1: Correct and complete answer
+        let question = "What is TCP/IP?";
+        let good_answer = "TCP/IP is a suite of communication protocols used to interconnect network devices on the internet. It stands for Transmission Control Protocol/Internet Protocol and provides end-to-end communications that specify how data should be packetized, addressed, transmitted, routed and received.";
+        
+        let result = reviewer.analyze_answer(question, good_answer).await;
+        match result {
+            Ok(is_correct) => {
+                println!("Good answer evaluation: {}", is_correct);
+                assert!(is_correct, "A comprehensive answer should be marked as correct");
+            }
+            Err(e) => {
+                panic!("analyze_answer failed for good answer: {:?}", e);
+            }
+        }
+
+        // Test case 2: Incorrect answer
+        let wrong_answer = "TCP/IP is a type of computer hardware used for storage.";
+        
+        let result = reviewer.analyze_answer(question, wrong_answer).await;
+        match result {
+            Ok(is_correct) => {
+                println!("Wrong answer evaluation: {}", is_correct);
+                assert!(!is_correct, "An incorrect answer should be marked as false");
+            }
+            Err(e) => {
+                panic!("analyze_answer failed for wrong answer: {:?}", e);
+            }
+        }
+
+        // Test case 3: Partially correct but incomplete answer
+        let incomplete_answer = "TCP/IP is something related to networking.";
+        
+        let result = reviewer.analyze_answer(question, incomplete_answer).await;
+        match result {
+            Ok(is_correct) => {
+                println!("Incomplete answer evaluation: {}", is_correct);
+                // This might be false since it lacks detail - adjust assertion based on your requirements
+                assert!(!is_correct, "An incomplete answer should typically be marked as false");
+            }
+            Err(e) => {
+                panic!("analyze_answer failed for incomplete answer: {:?}", e);
+            }
+        }
+
+        // Test case 4: Test with a more complex question and answer
+        let complex_question = "Explain how memory management works in operating systems";
+        let complex_answer = "Memory management in operating systems involves allocating and deallocating memory space to programs. It uses techniques like paging and segmentation to organize memory, virtual memory to extend available RAM using disk space, and implements protection mechanisms to prevent programs from accessing each other's memory spaces.";
+        
+        let result = reviewer.analyze_answer(complex_question, complex_answer).await;
+        match result {
+            Ok(is_correct) => {
+                println!("Complex answer evaluation: {}", is_correct);
+                assert!(is_correct, "A good explanation of memory management should be marked as correct");
+            }
+            Err(e) => {
+                panic!("analyze_answer failed for complex answer: {:?}", e);
+            }
+        }
+
+        // Test case 5: Empty answer (edge case)
+        let empty_answer = "";
+        
+        let result = reviewer.analyze_answer(question, empty_answer).await;
+        match result {
+            Ok(is_correct) => {
+                println!("Empty answer evaluation: {}", is_correct);
+                assert!(!is_correct, "An empty answer should be marked as false");
+            }
+            Err(e) => {
+                panic!("analyze_answer failed for empty answer: {:?}", e);
+            }
+        }
+    }
+
 }

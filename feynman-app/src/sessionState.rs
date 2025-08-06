@@ -2,6 +2,8 @@ use crate::topic::{SubTopic, SubTopicList};
 use std::collections::HashMap;
 use crate::reviewer::{ReviewerClient};
 use serde_json::Value;
+use tokio::sync::Notify;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct QuestionForSubtopic {
@@ -30,7 +32,8 @@ pub struct FeynmanSession {
     pub subtopic_list: SubTopicList,
     pub covered_subtopics: HashMap<String, SubTopic>, // Subtopics covered so far
     pub question_subtopics: Vec<String>,   // Subtopics currently being questioned
-    pub incomplete_subtopics: Vec<String>, // Subtopics still missing fields
+    pub incomplete_subtopics: HashMap<String, SubTopic>,
+    pub answer_notify: Arc<Notify>,
 }
 
 use std::future::Future;
@@ -50,7 +53,8 @@ impl FeynmanSession {
             subtopic_list,
             covered_subtopics: HashMap::new(),
             question_subtopics: vec![],
-            incomplete_subtopics: vec![],
+            incomplete_subtopics: HashMap::new(),
+            answer_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -85,7 +89,8 @@ impl FeynmanSession {
             session.in_between_buffer.push(segment)
         }
         FeynmanState::AnalyzingAnswers => {
-
+            session.answer_buffer.push(segment);
+            session.answer_notify.notify_one()
         }
         // ...other states to be implemented later...
         _ => {}
@@ -99,7 +104,8 @@ fn process_analyzing<'a>(
 ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
     Box::pin(async move {
         let detected_subtopics = session.subtopic_list.find_mentions(&segment, 70);
-
+        
+        //if the current segment contains no topics it put it into pending segments to process for later
         if detected_subtopics.is_empty() {
             session.pending_segments.push(segment);
             session.pending_no_subtopic_segment = true;
@@ -109,6 +115,7 @@ fn process_analyzing<'a>(
                 session.state = FeynmanState::Listening;
             }
         } else {
+            //combine pending segments and current segment
             let mut combined = session.pending_segments.join(" ");
             session.pending_segments.clear();
             session.pending_no_subtopic_segment = false;
@@ -118,6 +125,7 @@ fn process_analyzing<'a>(
             combined.push_str(&segment);
 
             let detected_subtopics: Vec<SubTopic> = detected_subtopics.into_iter().cloned().collect();
+            //analyze the topic for correctness
             let analysis_json = reviewer.analyze_topic(&combined, &detected_subtopics).await.unwrap();
 
             // Parse LLM output
@@ -131,7 +139,8 @@ fn process_analyzing<'a>(
                 let has_def = subtopic_result["has_definition"].as_bool().unwrap_or(false);
                 let has_mech = subtopic_result["has_mechanism"].as_bool().unwrap_or(false);
                 let has_ex = subtopic_result["has_example"].as_bool().unwrap_or(false);
-
+                
+                //if a topic was completely covered add it to the covered subtopics
                 if has_def && has_mech && has_ex {
                     session.covered_subtopics.insert(
                         name.clone(),
@@ -143,7 +152,8 @@ fn process_analyzing<'a>(
                         },
                     );
                 } else {
-                    incomplete_subtopics.push(name.clone());
+                    //if it contains incomplete subtopics begin this process
+                    session.add_to_incomplete_subtopics(name.clone(), has_def, has_mech, has_ex);
                     // Now parse questions as objects, not strings!
                     if let Some(questions_arr) = subtopic_result["questions"].as_array() {
                         for q in questions_arr {
@@ -165,6 +175,7 @@ fn process_analyzing<'a>(
                         }
                     }
                 }
+                //if no questions were generated then we either continue to next segment or go back to listenig
             if question_queue.is_empty() {
             // All subtopics complete
             if let Some(next_segment) = session.in_between_buffer.pop() {
@@ -175,12 +186,90 @@ fn process_analyzing<'a>(
         } else {
             // There are incomplete subtopics/questions: move to question delivery phase
             session.state = FeynmanState::DeliveringQuestions;
+            //we have the questions and their subtopics
             session.question_queue = question_queue;
             session.question_subtopics = incomplete_subtopics;
             // Do NOT process more segments here.
         }
         }
     })
-}
+    }
+
+     fn add_to_incomplete_subtopics(&mut self, name: String, has_def: bool, has_mech: bool, has_ex: bool) {
+        self.incomplete_subtopics.insert(name.clone(), SubTopic {
+            name,
+            has_definition: has_def,
+            has_mechanism: has_mech,
+            has_example: has_ex,
+        });
+    }
+
+    pub async fn analyze_answer(&mut self, reviewer: &ReviewerClient) -> Result<(), Box<dyn std::error::Error>> {
+        // Get current question
+        let current_question = if self.current_question_idx < self.question_queue.len() {
+            self.question_queue[self.current_question_idx].clone()
+        } else {
+            return Err("No current question".into());
+        };
+
+        // Wait for answer buffer to have content
+        loop {
+            if !self.answer_buffer.is_empty() {
+                break;
+            }
+            self.answer_notify.notified().await;
+        }
+
+        // Combine answer segments
+        let combined_answer = self.answer_buffer.join(" ");
+
+        // Analyze with GPT-4
+        let is_correct = reviewer.analyze_answer(&current_question.question, &combined_answer).await?;
+
+        if is_correct {
+            // Update subtopic field in incomplete_subtopics
+            self.update_subtopic_field(&current_question.subtopic, &current_question.field, true);
+            
+            // Check if complete - if so, move from incomplete to covered
+            if self.is_subtopic_complete(&current_question.subtopic) {
+                if let Some(complete_subtopic) = self.incomplete_subtopics.remove(&current_question.subtopic) {
+                    self.covered_subtopics.insert(current_question.subtopic.clone(), complete_subtopic);
+                }
+            }
+        }
+
+        // Clear answer buffer and go back to delivering questions
+        self.answer_buffer.clear();
+        self.state = FeynmanState::DeliveringQuestions;
+        
+        Ok(())
+    }
+
+    // ADD THESE HELPER FUNCTIONS:
+    fn update_subtopic_field(&mut self, subtopic_name: &str, field: &str, value: bool) {
+        // Update in incomplete_subtopics if it exists, otherwise create entry
+        let subtopic = self.incomplete_subtopics.entry(subtopic_name.to_string())
+            .or_insert_with(|| SubTopic {
+                name: subtopic_name.to_string(),
+                has_definition: false,
+                has_mechanism: false,
+                has_example: false,
+            });
+
+        match field {
+            "has_definition" => subtopic.has_definition = value,
+            "has_mechanism" => subtopic.has_mechanism = value,
+            "has_example" => subtopic.has_example = value,
+            _ => {}
+        }
+    }
+
+    fn is_subtopic_complete(&self, subtopic_name: &str) -> bool {
+        if let Some(subtopic) = self.incomplete_subtopics.get(subtopic_name) {
+            subtopic.has_definition && subtopic.has_mechanism && subtopic.has_example
+        } else {
+            false
+        }
+    }
     
 }    
