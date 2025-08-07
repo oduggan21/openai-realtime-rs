@@ -70,7 +70,7 @@ impl FeynmanSession {
             //in the listneing state we check if we have temp context from previous left over and add it to new segment
             FeynmanState::Listening => {
                 // If temp_context_buffer is not empty, combine it with segment
-                let mut combined = if !session.temp_context_buffer.is_empty() {
+                let combined = if !session.temp_context_buffer.is_empty() {
                     //get the temp buffer join all segments, add a space between end of buffer and next segment, and clear the temp buffer
                     let mut temp = session.temp_context_buffer.join(" ");
                     temp.push(' ');
@@ -139,7 +139,7 @@ impl FeynmanSession {
                 // Parse LLM output
                 let analysis: Value = serde_json::from_str(&analysis_json).expect("Valid JSON");
                 let mut question_queue: Vec<QuestionForSubtopic> = vec![];
-                let mut incomplete_subtopics = Vec::new();
+                let incomplete_subtopics = Vec::new();
 
                 if let Some(array) = analysis.as_array() {
                     for subtopic_result in array {

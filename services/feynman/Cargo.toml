@@ -18,3 +18,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }
 anyhow = { workspace = true }
 clap  = { workspace = true }
+thiserror = "2.0.12"
