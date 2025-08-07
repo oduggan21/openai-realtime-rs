@@ -21,3 +21,8 @@ Cargo.lock
 .idea/
 
 **/.env
+
+
+# dev
+grinchset.txt
+docker-compose.yaml

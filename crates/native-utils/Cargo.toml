@@ -1,0 +1,12 @@
+[package]
+name = "feynman-native-utils"
+version = "0.1.1"
+edition = "2024"
+
+[dependencies]
+tracing = { workspace = true }
+rubato = "0.16"
+anyhow = { workspace = true }
+base64 = "0.22"
+ringbuf = "0.4.7"
+cpal = { version = "0.15.3"}
