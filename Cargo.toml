@@ -1,10 +1,10 @@
 [workspace]
-members = [ "feynman-app","types", "utils"]
+members = [ "crates/openai-realtime", "feynman-app","types", "utils"]
 
 [package]
-name = "openai-realtime"
+name = "feynman"
 version = "0.0.3"
-edition = "2021"
+edition = "2024"
 
 [features]
 default = ["native-tls"]

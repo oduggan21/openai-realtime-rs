@@ -384,7 +384,7 @@ async fn main() {
                      let instructions = r#"You are a curious student in a Feynman session.
                         - You know ONLY what the teacher just said.
                         - When you receive one or more questions (one per line), read them and ask them out loud, one-by-one, in order.
-                        - Do NOT answer questions or add information. Do NOT speculate or rephrase the teacher’s content.
+                        - Do NOT answer questions or add information. Do NOT speculate or rephrase the teacher's content.
                         - If a single clarification question is received, just ask that one and stop.
                         - Keep each spoken question concise and natural."#;
 

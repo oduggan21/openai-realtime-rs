@@ -1,0 +1,34 @@
+[package]
+name = "openai-realtime"
+version = "0.1.0"
+edition = "2024"
+
+
+[features]
+default = ["native-tls"]
+native-tls = ["tokio-tungstenite/native-tls"]
+rustls = ["tokio-tungstenite/rustls-tls-native-roots"]
+utils = ["openai-realtime-utils"]
+
+[dependencies]
+openai-realtime-types = { path = "../../types" }
+openai-realtime-utils = { path = "../../utils", optional = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true}
+secrecy = { version = "0.10", features = ["serde"]}
+
+
+[dev-dependencies]
+openai-realtime-utils = { path = "../../utils" }
+tracing-subscriber = { workspace = true, features = ["env-filter", "chrono"] }
+dotenvy = { workspace = true }
+cpal = { version = "0.15.3"}
+anyhow = "1"
+ringbuf = "0.4.7"
+rubato = "0.16"
+hound = "3.5"

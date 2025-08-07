@@ -5,7 +5,7 @@ edition = "2024"
 
 
 [dependencies]
-openai-realtime = { path = "../" , features = ["utils"]}
+openai-realtime = { path = "../crates/openai-realtime" , features = ["utils"]}
 cpal = "0.15.3"
 ringbuf = "0.4.7"
 tokio = { version = "1", features = ["full"] }
