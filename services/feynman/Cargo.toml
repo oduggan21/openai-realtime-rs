@@ -6,7 +6,8 @@ edition = "2024"
 
 [dependencies]
 feynman-core = { path = "../../crates/core" }
-openai-realtime = { path = "../../crates/openai-realtime" , features = ["utils"]}
+feynman-native-utils = { path = "../../crates/native-utils" }
+openai-realtime = { path = "../../crates/openai-realtime" }
 cpal = "0.15.3"
 ringbuf = "0.4.7"
 tokio = { version = "1", features = ["full"] }
