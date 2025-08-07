@@ -1,4 +1,5 @@
 mod config;
+mod prompt_loader;
 
 use crate::config::{Config, INPUT_CHUNK_SIZE, OUTPUT_CHUNK_SIZE, OUTPUT_LATENCY_MS};
 use anyhow::{Context, Result};
@@ -14,6 +15,7 @@ use openai_realtime::types::audio::{ServerVadTurnDetection, TurnDetection};
 use ringbuf::traits::{Consumer, Producer, Split};
 use rubato::Resampler;
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::Arc;
 use tracing_subscriber::fmt::time::ChronoLocal;
 
@@ -38,7 +40,6 @@ async fn main() -> Result<()> {
     let config = Config::from_env().context("Failed to load application configuration")?;
 
     // --- 2. Initialize Logging ---
-    // Create a tracing subscriber for tracking debug statements with timestamps.
     tracing_subscriber::fmt()
         .with_max_level(config.log_level)
         .with_timer(ChronoLocal::rfc_3339())
@@ -49,13 +50,19 @@ async fn main() -> Result<()> {
     // --- 3. Parse Command-Line Arguments ---
     let args = Cli::parse();
 
-    // --- 4. Initialize API Clients ---
+    // --- 4. Load Prompts ---
+    let prompts = prompt_loader::load_prompts(Path::new("prompts"))
+        .context("Failed to load LLM prompts")?;
+    tracing::info!("Loaded {} prompts successfully.", prompts.len());
+
+    // --- 5. Initialize API Clients ---
     let reviewer = Arc::new(ReviewerClient::new(
         config.openai_api_key.clone(),
         config.chat_model.clone(),
+        prompts,
     ));
 
-    // --- 5. Application Setup ---
+    // --- 6. Application Setup ---
 
     // This block sets up audio channels, gets an input device, configures it,
     // and prints the device information.
