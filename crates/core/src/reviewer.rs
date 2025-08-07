@@ -1,10 +1,11 @@
 use crate::topic::SubTopic;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
 use reqwest::Client;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
 pub struct LlmResponse {
@@ -65,6 +66,7 @@ pub struct ReviewerClient {
     client: Client,
     api_key: String,
     model: String,
+    prompts: HashMap<String, String>,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -74,11 +76,12 @@ pub struct AnalysisOut {
 }
 
 impl ReviewerClient {
-    pub fn new(api_key: String, model: String) -> Self {
+    pub fn new(api_key: String, model: String, prompts: HashMap<String, String>) -> Self {
         Self {
             client: Client::new(),
             api_key,
             model,
+            prompts,
         }
     }
 }
@@ -95,9 +98,14 @@ impl Reviewer for ReviewerClient {
         context_buffer: &str,
         new_segment: &str,
     ) -> Result<String> {
-        let prompt = format!(
-            "Given this context:\n \"{context_buffer}\"\n and this new segment: \n\"{new_segment}\"\nDoes the new segment continue the same concept within the topic, when I ask if it continues the same concept I mean someone could be teaching you about football and specifically talking about touchdowns where they talk about how touchdowns are scored, that fits within the concept, but if they start talking about field goals than that is a new concept and you want to say its a new concept? If not, what is the new concept? Respond as JSON: {{\"topic_change\": <true/false>, \"new_topic\": <string or null>}}"
-        );
+        let prompt_template = self
+            .prompts
+            .get("looks_like_topic_change")
+            .context("Missing prompt template: 'looks_like_topic_change'")?;
+        let prompt = prompt_template
+            .replace("{context_buffer}", context_buffer)
+            .replace("{new_segment}", new_segment);
+
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -138,35 +146,13 @@ impl Reviewer for ReviewerClient {
             .collect::<Vec<_>>()
             .join(", ");
 
-        let prompt = format!(
-            r#"
-        You are a smart beginner in a Feynman-technique session. Analyze the following teacher segment for coverage of the subtopics: [{subtopic_names}].
-
-        For EACH subtopic, answer:
-        - Does the segment provide a clear definition for it? (true/false)
-        - Does it explain its mechanism or how it works? (true/false)
-        - Does it provide a concrete example? (true/false)
-
-        If a field is missing, write a short clarifying question for that field, and indicate which field it corresponds to. Output questions as objects: {{"field": "<field_name>", "question": "<question_text>"}}
-
-        Output STRICT JSON array of objects (one per subtopic):
-        [
-        {{
-            "subtopic": "<name>",
-            "has_definition": <true|false>,
-            "has_mechanism": <true|false>,
-            "has_example": <true|false>,
-            "questions": [{{"field": "<field_name>", "question": "<question_text>"}}, ...]
-        }},
-        ...
-        ]
-
-        Teacher segment:
-        ---
-        {segment}
-        ---
-    "#
-        );
+        let prompt_template = self
+            .prompts
+            .get("analyze_topic")
+            .context("Missing prompt template: 'analyze_topic'")?;
+        let prompt = prompt_template
+            .replace("{subtopic_names}", &subtopic_names)
+            .replace("{segment}", segment);
 
         let body = serde_json::json!({
             "model": self.model,
@@ -212,19 +198,13 @@ impl Reviewer for ReviewerClient {
         Ok(normalized)
     }
     async fn check_answer_satisfies_question(&self, segment: &str, question: &str) -> Result<bool> {
-        let prompt = format!(
-            r#"Given the following teacher answer segment:
-            ---
-            {segment}
-            ---
-            and the question:
-            "{question}"
-
-            Does the answer segment satisfactorily answer the question? Respond STRICTLY as a JSON object:
-            {{"satisfies": true|false }}
-
-            Do NOT add any explanation, just the JSON."#
-        );
+        let prompt_template = self
+            .prompts
+            .get("check_answer_satisfies_question")
+            .context("Missing prompt template: 'check_answer_satisfies_question'")?;
+        let prompt = prompt_template
+            .replace("{segment}", segment)
+            .replace("{question}", question);
 
         let body = serde_json::json!({
             "model": self.model,
@@ -262,10 +242,12 @@ impl Reviewer for ReviewerClient {
         Ok(satisfies)
     }
     async fn generate_subtopics(&self, topic: &str) -> Result<Vec<String>> {
-        let prompt = format!(
-            "List all the key subtopics and concepts someone should cover to thoroughly teach the topic \"{topic}\" to a beginner. \
-        Respond ONLY as a numbered list of subtopic names (no explanations)."
-        );
+        let prompt_template = self
+            .prompts
+            .get("generate_subtopics")
+            .context("Missing prompt template: 'generate_subtopics'")?;
+        let prompt = prompt_template.replace("{topic}", topic);
+
         let body = serde_json::json!({
             "model": self.model,
             "messages": [
@@ -322,24 +304,14 @@ impl Reviewer for ReviewerClient {
         }
 
         let subtopics = subtopic_list.join(", ");
-        let prompt = format!(
-            r#"
-    You are a Feynman session assistant.
-    Given the teacher's latest segment:
-    ---
-    {segment}
-    ---
-    and the main topic: "{main_topic}"
-    and these subtopics: [{subtopics}]
-
-    Identify (in one short sentence) what subtopic or concept the teacher was last explaining, using ONLY the segment and subtopics.
-
-    Respond ONLY as a message to the teacher in this format:
-    "You last left off on [subtopic or context]. Please keep telling me more about it."
-
-    Do NOT add any explanation, only output the message.
-    "#
-        );
+        let prompt_template = self
+            .prompts
+            .get("analyze_last_explained_context")
+            .context("Missing prompt template: 'analyze_last_explained_context'")?;
+        let prompt = prompt_template
+            .replace("{segment}", segment)
+            .replace("{main_topic}", main_topic)
+            .replace("{subtopics}", &subtopics);
 
         let body = serde_json::json!({
             "model": self.model,
@@ -371,23 +343,13 @@ impl Reviewer for ReviewerClient {
     }
 
     async fn analyze_answer(&self, question: &str, answer: &str) -> Result<bool> {
-        let prompt = format!(
-            r#"You are evaluating a student's answer in a Feynman teaching session.
-
-Question: "{question}"
-
-Student's Answer: "{answer}"
-
-Is this answer correct and sufficiently complete for the question asked? 
-- The answer should demonstrate understanding of the concept
-- It doesn't need to be perfect, but should show the student grasps the main idea
-- Consider if a beginner would understand the concept from this explanation
-
-Respond STRICTLY as JSON:
-{{"correct": true|false}}
-
-Do NOT add any explanation, just the JSON."#
-        );
+        let prompt_template = self
+            .prompts
+            .get("analyze_answer")
+            .context("Missing prompt template: 'analyze_answer'")?;
+        let prompt = prompt_template
+            .replace("{question}", question)
+            .replace("{answer}", answer);
 
         let body = serde_json::json!({
             "model": self.model,
@@ -441,7 +403,10 @@ mod tests {
         dotenvy::dotenv_override().ok();
         let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
         let model = "gpt-4o".to_string();
-        let reviewer = ReviewerClient::new(api_key, model);
+        // For testing, we create a dummy prompt map. In a real scenario, this would be loaded.
+        let mut prompts = HashMap::new();
+        prompts.insert("generate_subtopics".to_string(), "List all the key subtopics and concepts someone should cover to thoroughly teach the topic \"{topic}\" to a beginner. Respond ONLY as a numbered list of subtopic names (no explanations).".to_string());
+        let reviewer = ReviewerClient::new(api_key, model, prompts);
 
         // Try generating subtopics for "Operating Systems"
         let topic = "Operating Systems";
@@ -466,7 +431,35 @@ mod tests {
         dotenvy::dotenv_override().ok();
         let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
         let model = "gpt-4o".to_string();
-        let reviewer = ReviewerClient::new(api_key, model);
+        let mut prompts = HashMap::new();
+        prompts.insert("analyze_topic".to_string(), r#"
+        You are a smart beginner in a Feynman-technique session. Analyze the following teacher segment for coverage of the subtopics: [{subtopic_names}].
+
+        For EACH subtopic, answer:
+        - Does the segment provide a clear definition for it? (true/false)
+        - Does it explain its mechanism or how it works? (true/false)
+        - Does it provide a concrete example? (true/false)
+
+        If a field is missing, write a short clarifying question for that field, and indicate which field it corresponds to. Output questions as objects: {{\"field\": "<field_name>", "question": "<question_text>"}}
+
+        Output STRICT JSON array of objects (one per subtopic):
+        [
+        {{
+            "subtopic": "<name>",
+            "has_definition": <true|false>,
+            "has_mechanism": <true|false>,
+            "has_example": <true|false>,
+            "questions": [{{"field": "<field_name>", "question": "<question_text>"}}, ...]
+        }},
+        ...
+        ]
+
+        Teacher segment:
+        ---
+        {segment}
+        ---
+    "#.to_string());
+        let reviewer = ReviewerClient::new(api_key, model, prompts);
 
         // Prepare a simple segment and subtopics
         let segment =
@@ -542,7 +535,27 @@ mod tests {
         dotenvy::dotenv_override().ok();
         let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
         let model = "gpt-4o".to_string();
-        let reviewer = ReviewerClient::new(api_key, model);
+        let mut prompts = HashMap::new();
+        prompts.insert(
+            "analyze_answer".to_string(),
+            r#"You are evaluating a student's answer in a Feynman teaching session.
+
+Question: "{question}"
+
+Student's Answer: "{answer}"
+
+Is this answer correct and sufficiently complete for the question asked? 
+- The answer should demonstrate understanding of the concept
+- It doesn't need to be perfect, but should show the student grasps the main idea
+- Consider if a beginner would understand the concept from this explanation
+
+Respond STRICTLY as JSON:
+{{"correct": true|false}}
+
+Do NOT add any explanation, just the JSON."#
+                .to_string(),
+        );
+        let reviewer = ReviewerClient::new(api_key, model, prompts);
 
         // Test case 1: Correct and complete answer
         let question = "What is TCP/IP?";
