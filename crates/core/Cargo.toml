@@ -11,3 +11,4 @@ reqwest = { workspace = true }
 anyhow = { workspace = true }
 dotenvy = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }

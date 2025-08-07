@@ -2,8 +2,11 @@ use crate::{
     reviewer::ReviewerClient,
     topic::{SubTopic, SubTopicList},
 };
+use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::Notify;
 
@@ -37,9 +40,6 @@ pub struct FeynmanSession {
     pub incomplete_subtopics: HashMap<String, SubTopic>,
     pub answer_notify: Arc<Notify>,
 }
-
-use std::future::Future;
-use std::pin::Pin;
 
 impl FeynmanSession {
     pub fn new(subtopic_list: SubTopicList) -> Self {
@@ -84,7 +84,13 @@ impl FeynmanSession {
                 // Move to analyzing state
                 // switch to the analyzing state and process the current segment with our session, reviewer and segment
                 session.state = FeynmanState::Analyzing;
-                Self::process_analyzing(session, reviewer, combined).await;
+                if let Err(e) = Self::process_analyzing(session, reviewer, combined).await {
+                    tracing::error!(
+                        "Error during analysis: {:?}. Resetting to Listening state.",
+                        e
+                    );
+                    session.state = FeynmanState::Listening;
+                }
             }
             FeynmanState::Analyzing => {
                 //if we are in an analyzing state and a segment comes in just buffer it
@@ -96,16 +102,16 @@ impl FeynmanSession {
                 session.answer_buffer.push(segment);
                 session.answer_notify.notify_one()
             }
-            // ...other states to be implemented later...
-            _ => {}
         }
     }
 
+    // This function returns a Pinned Future to allow for async recursion.
+    // The internal helper function `_process_analyzing_inner` contains the actual logic.
     fn process_analyzing<'a>(
         session: &'a mut FeynmanSession,
         reviewer: &'a ReviewerClient,
         segment: String,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let detected_subtopics = session.subtopic_list.find_mentions(&segment, 70);
 
@@ -114,7 +120,8 @@ impl FeynmanSession {
                 session.pending_segments.push(segment);
                 session.pending_no_subtopic_segment = true;
                 if let Some(next_segment) = session.in_between_buffer.pop() {
-                    Self::process_analyzing(session, reviewer, next_segment).await;
+                    // Recursive call is safe here because of the Box::pin indirection.
+                    Self::process_analyzing(session, reviewer, next_segment).await?;
                 } else {
                     session.state = FeynmanState::Listening;
                 }
@@ -134,10 +141,12 @@ impl FeynmanSession {
                 let analysis_json = reviewer
                     .analyze_topic(&combined, &detected_subtopics)
                     .await
-                    .unwrap();
+                    .context("Reviewer failed to analyze the topic segment")?;
 
                 // Parse LLM output
-                let analysis: Value = serde_json::from_str(&analysis_json).expect("Valid JSON");
+                let analysis: Value = serde_json::from_str(&analysis_json)
+                    .context("Failed to parse JSON from reviewer's analysis")?;
+
                 let mut question_queue: Vec<QuestionForSubtopic> = vec![];
                 let incomplete_subtopics = Vec::new();
 
@@ -145,7 +154,7 @@ impl FeynmanSession {
                     for subtopic_result in array {
                         let name = subtopic_result["subtopic"]
                             .as_str()
-                            .unwrap_or_default()
+                            .context("Subtopic result in JSON is missing a 'subtopic' field")?
                             .to_string();
                         let has_def = subtopic_result["has_definition"].as_bool().unwrap_or(false);
                         let has_mech = subtopic_result["has_mechanism"].as_bool().unwrap_or(false);
@@ -197,7 +206,7 @@ impl FeynmanSession {
                 if question_queue.is_empty() {
                     // All subtopics complete
                     if let Some(next_segment) = session.in_between_buffer.pop() {
-                        Self::process_analyzing(session, reviewer, next_segment).await;
+                        Self::process_analyzing(session, reviewer, next_segment).await?;
                     } else {
                         session.state = FeynmanState::Listening;
                     }
@@ -210,6 +219,7 @@ impl FeynmanSession {
                     // Do NOT process more segments here.
                 }
             }
+            Ok(())
         })
     }
 
@@ -231,15 +241,12 @@ impl FeynmanSession {
         );
     }
 
-    pub async fn analyze_answer(
-        &mut self,
-        reviewer: &ReviewerClient,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn analyze_answer(&mut self, reviewer: &ReviewerClient) -> Result<()> {
         // Get current question
         let current_question = if self.current_question_idx < self.question_queue.len() {
             self.question_queue[self.current_question_idx].clone()
         } else {
-            return Err("No current question".into());
+            return Err(anyhow::anyhow!("No current question to analyze answer for"));
         };
 
         // Wait for answer buffer to have content
