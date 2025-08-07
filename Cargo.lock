@@ -507,7 +507,7 @@ dependencies = [
  "clap",
  "cpal",
  "dotenvy",
- "fuzzy-matcher",
+ "feynman-core",
  "openai-realtime",
  "reqwest",
  "ringbuf",
@@ -522,6 +522,10 @@ dependencies = [
 [[package]]
 name = "feynman-core"
 version = "0.1.0"
+dependencies = [
+ "fuzzy-matcher",
+ "serde",
+]
 
 [[package]]
 name = "feynman-native-utils"

@@ -5,6 +5,7 @@ edition = "2024"
 
 
 [dependencies]
+feynman-core = { path = "../crates/core" }
 openai-realtime = { path = "../crates/openai-realtime" , features = ["utils"]}
 cpal = "0.15.3"
 ringbuf = "0.4.7"
@@ -18,4 +19,3 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }
 anyhow = "1"
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 clap = {workspace =true}
-fuzzy-matcher = "0.3"

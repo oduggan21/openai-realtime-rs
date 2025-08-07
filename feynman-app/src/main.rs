@@ -16,12 +16,11 @@ use openai_realtime::utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
 use openai_realtime::utils as utils;
 use openai_realtime::types::audio::{TurnDetection, ServerVadTurnDetection};
 
-mod topic;
 mod reviewer;
 mod session_state;
 
 
-use topic::{TopicBuffer, TopicChange, Topic, SubTopic, SubTopicList};
+use feynman_core::topic::{TopicBuffer, TopicChange, Topic, SubTopic, SubTopicList};
 use reviewer::{ReviewerClient, AnalysisOut};
 use session_state::{FeynmanState, FeynmanSession};
 

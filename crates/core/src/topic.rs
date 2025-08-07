@@ -1,10 +1,10 @@
-use serde::Deserialize;
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
+use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
-pub struct Topic{
-    pub main_topic: String
+pub struct Topic {
+    pub main_topic: String,
 }
 
 // struct to hold response from topic analyzer
@@ -40,15 +40,14 @@ impl TopicBuffer {
 }
 
 #[derive(Debug, Clone)]
-pub struct SubTopic{
+pub struct SubTopic {
     pub name: String,
     pub has_definition: bool,
     pub has_mechanism: bool,
     pub has_example: bool,
 }
 
-
-impl SubTopic{
+impl SubTopic {
     pub fn new(name: String) -> Self {
         Self {
             name,
@@ -58,30 +57,32 @@ impl SubTopic{
         }
     }
 
-    pub fn is_complete(&self) -> bool{
+    pub fn is_complete(&self) -> bool {
         self.has_definition && self.has_mechanism && self.has_example
     }
-    pub fn score(&self) -> u8{
+    pub fn score(&self) -> u8 {
         self.has_definition as u8 + self.has_mechanism as u8 + self.has_example as u8
     }
 }
 
-pub struct SubTopicList{
+pub struct SubTopicList {
     pub subtopics: Vec<SubTopic>,
-    matcher: SkimMatcherV2
+    matcher: SkimMatcherV2,
 }
 
-impl SubTopicList{
-    pub fn new(subtopics: Vec<SubTopic>) -> Self{
-        Self {  subtopics,
+impl SubTopicList {
+    pub fn new(subtopics: Vec<SubTopic>) -> Self {
+        Self {
+            subtopics,
             matcher: SkimMatcherV2::default(),
-         }
+        }
     }
 
-     // Returns subtopics whose name matches the segment fuzzily above a threshold
+    // Returns subtopics whose name matches the segment fuzzily above a threshold
     pub fn find_mentions(&self, segment: &str, threshold: i64) -> Vec<&SubTopic> {
         let segment_lower = segment.to_lowercase();
-        self.subtopics.iter()
+        self.subtopics
+            .iter()
             .filter(|subtopic| {
                 let name = subtopic.name.to_lowercase();
                 // Fuzzy match (score above threshold, e.g. 70)
