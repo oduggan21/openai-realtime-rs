@@ -520,6 +520,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "feynman-core"
+version = "0.1.0"
+
+[[package]]
 name = "feynman-native-utils"
 version = "0.1.1"
 dependencies = [

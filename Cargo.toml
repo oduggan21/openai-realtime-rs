@@ -4,7 +4,7 @@ version = "0.0.3"
 edition = "2024"
 
 [workspace]
-members = [ "crates/openai-realtime", "crates/openai-realtime-types", "crates/native-utils", "feynman-app"]
+members = [ "crates/openai-realtime", "crates/openai-realtime-types", "crates/native-utils", "feynman-app", "crates/core"]
 
 [dev-dependencies]
 feynman-native-utils = { path = "./crates/native-utils" }
