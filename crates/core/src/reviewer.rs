@@ -262,7 +262,6 @@ impl ReviewerClient {
     pub async fn analyze_last_explained_context(
         &self,
         segment: &str,
-        main_topic: &str,
         subtopic_list: &[String],
     ) -> anyhow::Result<String> {
         // If segment is blank, nudge user to continue
@@ -281,7 +280,6 @@ impl ReviewerClient {
     ---
     {segment}
     ---
-    and the main topic: "{main_topic}"
     and these subtopics: [{subtopics}]
 
     Identify (in one short sentence) what subtopic or concept the teacher was last explaining, using ONLY the segment and subtopics.

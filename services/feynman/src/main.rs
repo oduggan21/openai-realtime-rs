@@ -16,15 +16,8 @@ use rubato::Resampler;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tracing_subscriber::fmt::time::ChronoLocal;
+use feynman_core::Input;
 
-pub enum Input {
-    Audio(Vec<f32>),
-    Initialize(),
-    Initialized(),
-    AISpeaking(),
-    AISpeakingDone(),
-    CreateConversationItem(openai_realtime::types::Item),
-}
 
 #[derive(Parser)]
 struct Cli {
@@ -225,6 +218,10 @@ async fn main() -> Result<()> {
         100,
     )?;
 
+    //build channel to determine whe the ai is speaking
+    let(ai_speaking_tx, _) = tokio::sync::broadcast::channel::<bool>(16);
+    let ai_speaking_notifier = ai_speaking_tx.clone();
+
     // This channel receives base64 encoded audio from the server events task.
     let (post_tx, mut post_rx) = tokio::sync::mpsc::channel::<Base64EncodedAudioBytes>(100);
 
@@ -293,7 +290,7 @@ async fn main() -> Result<()> {
                 openai_realtime::types::events::ServerEvent::ConversationItemInputAudioTranscriptionCompleted(data ) => {
                     let segment = data.transcript().trim().to_owned();
                     tracing::info!("User said: \"{}\"", segment);
-                    FeynmanSession::process_segment(&mut session, &reviewer2, segment).await;
+                    FeynmanSession::process_segment(&mut session, &reviewer2, segment, &client_ctrl2, &ai_speaking_tx).await;
                 }
                 
                 // If we receive response audio, send it to the post-processing channel.
@@ -328,6 +325,8 @@ async fn main() -> Result<()> {
         INPUT_CHUNK_SIZE,
     )?;
 
+
+
     // This task handles client-side logic: sending user audio and managing state.
     let client_handle = tokio::spawn(async move {
         let mut ai_speaking = false;
@@ -344,6 +343,7 @@ async fn main() -> Result<()> {
             ai_speaking: &mut bool,
             buffer: &mut VecDeque<f32>,
             in_resampler: &mut impl Resampler<f32>,
+            ai_speaking_notifier: &tokio::sync::broadcast::Sender<bool>,  
         ) -> Result<()> {
             match i {
                 Input::Initialize() => {
@@ -379,10 +379,23 @@ async fn main() -> Result<()> {
                 Input::Initialized() => {
                     tracing::info!("Session initialized successfully.");
                     *initialized = true;
+
+                    let greeting_message = format!("Okay, let's begin");
+    
+                // Build the conversation item.
+                let item = openai_realtime::types::MessageItem::builder()
+                    .with_role(openai_realtime::types::MessageRole::System) // System tells AI what to do
+                    .with_input_text(&greeting_message)
+                    .build();
+                
+                // Send the item and trigger the response.
+                realtime_api.create_conversation_item(openai_realtime::types::Item::Message(item)).await?;
+                realtime_api.create_response().await?;
                 }
                 Input::AISpeaking() => {
                     if !*ai_speaking {
                         tracing::debug!("AI speaking...");
+                        let _ = ai_speaking_notifier.send(true);
                     }
                     buffer.clear();
                     *ai_speaking = true;
@@ -390,6 +403,7 @@ async fn main() -> Result<()> {
                 Input::AISpeakingDone() => {
                     if *ai_speaking {
                         tracing::debug!("AI speaking done");
+                        let _ = ai_speaking_notifier.send(false); 
                     }
                     *ai_speaking = false;
                 }
@@ -433,6 +447,7 @@ async fn main() -> Result<()> {
                 &mut ai_speaking,
                 &mut buffer,
                 &mut in_resampler,
+                &ai_speaking_notifier,
             )
             .await
             {

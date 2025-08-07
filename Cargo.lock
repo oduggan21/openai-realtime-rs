@@ -505,6 +505,8 @@ dependencies = [
  "anyhow",
  "dotenvy",
  "fuzzy-matcher",
+ "openai-realtime",
+ "openai-realtime-types",
  "reqwest",
  "serde",
  "serde_json",

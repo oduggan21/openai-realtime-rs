@@ -12,3 +12,5 @@ anyhow = { workspace = true }
 dotenvy = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+openai-realtime = { path = "../../crates/openai-realtime" }
+openai-realtime-types = { path = "../../crates/openai-realtime-types" }

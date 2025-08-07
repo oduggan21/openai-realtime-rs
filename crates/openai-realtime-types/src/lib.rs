@@ -3,7 +3,7 @@ pub mod session;
 pub mod tools;
 pub mod audio;
 pub mod events;
-mod content;
+pub mod content;
 
 //re-export types for easier access
 pub use session::Session;
