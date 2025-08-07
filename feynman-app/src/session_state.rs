@@ -1,5 +1,7 @@
-use crate::reviewer::ReviewerClient;
-use feynman_core::topic::{SubTopic, SubTopicList};
+use feynman_core::{
+    reviewer::ReviewerClient,
+    topic::{SubTopic, SubTopicList},
+};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;

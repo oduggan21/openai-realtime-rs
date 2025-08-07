@@ -1,33 +1,28 @@
-use std::collections::{VecDeque, HashSet};
-use serde::Deserialize;
-use cpal::{FrameCount, StreamConfig};
-use cpal::traits::{DeviceTrait, StreamTrait};
-use ringbuf::{
-    traits::{Consumer, Producer, Split},
-};
 use clap::Parser;
+use cpal::traits::{DeviceTrait, StreamTrait};
+use cpal::{FrameCount, StreamConfig};
+use feynman_core::reviewer::ReviewerClient;
+use feynman_core::topic::{SubTopic, SubTopicList, Topic};
+use ringbuf::traits::{Consumer, Producer, Split};
+use serde::Deserialize;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
+use openai_realtime::types::audio::Base64EncodedAudioBytes;
+use openai_realtime::types::audio::{ServerVadTurnDetection, TurnDetection};
+use openai_realtime::utils;
+use openai_realtime::utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
 use rubato::Resampler;
 use tracing::Level;
 use tracing_subscriber::fmt::time::ChronoLocal;
-use openai_realtime::types::audio::Base64EncodedAudioBytes;
-use openai_realtime::utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
-use openai_realtime::utils as utils;
-use openai_realtime::types::audio::{TurnDetection, ServerVadTurnDetection};
 
-mod reviewer;
 mod session_state;
 
-
-use feynman_core::topic::{TopicBuffer, TopicChange, Topic, SubTopic, SubTopicList};
-use reviewer::{ReviewerClient, AnalysisOut};
-use session_state::{FeynmanState, FeynmanSession};
-
+use session_state::{FeynmanSession, FeynmanState};
 
 const INPUT_CHUNK_SIZE: usize = 1024;
 const OUTPUT_CHUNK_SIZE: usize = 1024;
-const OUTPUT_LATENCY_MS: usize =   1000;
+const OUTPUT_LATENCY_MS: usize = 1000;
 
 pub enum Input {
     Audio(Vec<f32>),
@@ -58,7 +53,7 @@ async fn main() {
 
 
     
-    //create tracing subcsriber to tracking debug statements with timestamps
+    // create tracing subcsriber to tracking debug statements with timestamps
     tracing_subscriber::fmt()
         .with_max_level(Level::DEBUG)
         .with_timer(ChronoLocal::rfc_3339())

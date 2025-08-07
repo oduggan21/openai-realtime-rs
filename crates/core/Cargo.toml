@@ -5,4 +5,11 @@ edition = "2024"
 
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
 fuzzy-matcher = "0.3.7"
+reqwest = { workspace = true }
+anyhow = { workspace = true }
+dotenvy = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

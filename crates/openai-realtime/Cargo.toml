@@ -28,7 +28,7 @@ feynman-native-utils = { path = "../native-utils" }
 tracing-subscriber = { workspace = true, features = ["env-filter", "chrono"] }
 dotenvy = { workspace = true }
 cpal = { version = "0.15.3"}
-anyhow = "1"
+anyhow = { workspace = true }
 ringbuf = "0.4.7"
 rubato = "0.16"
 hound = "3.5"

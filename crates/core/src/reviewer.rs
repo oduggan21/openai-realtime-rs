@@ -1,4 +1,4 @@
-use feynman_core::topic::SubTopic;
+use crate::topic::SubTopic;
 use reqwest::Client;
 use serde::Deserialize;
 
@@ -381,7 +381,7 @@ Do NOT add any explanation, just the JSON."#
 #[cfg(test)]
 mod tests {
     use super::*;
-    use feynman_core::topic::SubTopic;
+    use crate::topic::SubTopic;
     use std::env;
 
     // This test will run only if you have a valid API key in your environment

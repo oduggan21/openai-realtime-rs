@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 tracing = { workspace = true }
 rubato = "0.16"
-anyhow = "1"
+anyhow = { workspace = true }
 base64 = "0.22"
 ringbuf = "0.4.7"
 cpal = { version = "0.15.3"}
