@@ -1,0 +1,1 @@
+List all the key subtopics and concepts someone should cover to thoroughly teach the topic "{topic}" to a beginner. Respond ONLY as a numbered list of subtopic names (no explanations).
