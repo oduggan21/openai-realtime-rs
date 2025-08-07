@@ -8,11 +8,9 @@ edition = "2024"
 default = ["native-tls"]
 native-tls = ["tokio-tungstenite/native-tls"]
 rustls = ["tokio-tungstenite/rustls-tls-native-roots"]
-utils = ["feynman-native-utils"]
 
 [dependencies]
 openai-realtime-types = { path = "../openai-realtime-types" }
-feynman-native-utils = { path = "../native-utils", optional = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 tokio = { workspace = true }
@@ -25,7 +23,6 @@ anyhow = { workspace = true }
 
 
 [dev-dependencies]
-feynman-native-utils = { path = "../native-utils" }
 tracing-subscriber = { workspace = true, features = ["env-filter", "chrono"] }
 dotenvy = { workspace = true }
 cpal = { version = "0.15.3"}
