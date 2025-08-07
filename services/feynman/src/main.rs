@@ -68,6 +68,8 @@ async fn main() -> Result<()> {
     // and prints the device information.
     // Audio channels for communication between tasks.
     let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Input>(1024);
+    // Create the command channel to decouple core logic from the runtime.
+    let (command_tx, mut command_rx) = tokio::sync::mpsc::channel::<feynman_core::Command>(32);
 
     // Setup audio input device.
     let input =
@@ -265,6 +267,7 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to get server events channel")?;
     let reviewer2 = reviewer.clone();
+    let command_tx_for_server = command_tx.clone();
 
     let server_handle = tokio::spawn(async move {
         let mut session = FeynmanSession::new(subtopic_list);
@@ -300,7 +303,7 @@ async fn main() -> Result<()> {
                 openai_realtime::types::events::ServerEvent::ConversationItemInputAudioTranscriptionCompleted(data ) => {
                     let segment = data.transcript().trim().to_owned();
                     tracing::info!("User said: \"{}\"", segment);
-                    FeynmanSession::process_segment(&mut session, &*reviewer2, segment).await;
+                    FeynmanSession::process_segment(&mut session, &*reviewer2, segment, command_tx_for_server.clone()).await;
                 }
                 
                 // If we receive response audio, send it to the post-processing channel.
@@ -334,6 +337,34 @@ async fn main() -> Result<()> {
         REALTIME_API_PCM16_SAMPLE_RATE,
         INPUT_CHUNK_SIZE,
     )?;
+
+    // This task handles commands from the core logic, executing side effects.
+    let input_tx_for_cmd_handler = input_tx.clone();
+    let command_handler = tokio::spawn(async move {
+        while let Some(command) = command_rx.recv().await {
+            match command {
+                feynman_core::Command::SpeakText(text) => {
+                    tracing::info!("COMMAND RECEIVED: Speak Text: '{}'", text);
+                    // TODO: In a future PR, this will trigger the OpenAI client to synthesize speech.
+                    // For now, we just log that we received the command.
+                    let item = openai_realtime::types::MessageItem::builder()
+                        .with_role(openai_realtime::types::MessageRole::System)
+                        .with_input_text(&text)
+                        .build();
+                    
+                    // We need a channel to send this command over to the client_handle
+                    // Let's reuse the 'input_tx' for this.
+                    if let Err(e) = input_tx_for_cmd_handler.send(Input::CreateConversationItem(openai_realtime::types::Item::Message(item))).await {
+                         tracing::error!("Failed to send CreateConversationItem command: {:?}", e);
+                    }
+                }
+                feynman_core::Command::SessionComplete(message) => {
+                    tracing::info!("COMMAND RECEIVED: Session Complete: '{}'", message);
+                    // Here you could break the loop or trigger a shutdown.
+                }
+            }
+        }
+    });
 
     // This task handles client-side logic: sending user audio and managing state.
     let client_handle = tokio::spawn(async move {
@@ -453,6 +484,7 @@ async fn main() -> Result<()> {
         _ = post_process => {},
         _ = server_handle => {},
         _ = client_handle => {},
+        _ = command_handler => {},
         _ = tokio::signal::ctrl_c() => {
             tracing::info!("Received Ctrl-C, shutting down...");
         }
