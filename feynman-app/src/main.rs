@@ -2,23 +2,19 @@ use clap::Parser;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{FrameCount, StreamConfig};
 use feynman_core::reviewer::ReviewerClient;
+use feynman_core::session_state::FeynmanSession;
 use feynman_core::topic::{SubTopic, SubTopicList, Topic};
-use ringbuf::traits::{Consumer, Producer, Split};
-use serde::Deserialize;
-use std::collections::{HashSet, VecDeque};
-use std::sync::{Arc, Mutex};
-
 use openai_realtime::types::audio::Base64EncodedAudioBytes;
 use openai_realtime::types::audio::{ServerVadTurnDetection, TurnDetection};
 use openai_realtime::utils;
 use openai_realtime::utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
+use ringbuf::traits::{Consumer, Producer, Split};
 use rubato::Resampler;
+use serde::Deserialize;
+use std::collections::{HashSet, VecDeque};
+use std::sync::{Arc, Mutex};
 use tracing::Level;
 use tracing_subscriber::fmt::time::ChronoLocal;
-
-mod session_state;
-
-use session_state::{FeynmanSession, FeynmanState};
 
 const INPUT_CHUNK_SIZE: usize = 1024;
 const OUTPUT_CHUNK_SIZE: usize = 1024;
@@ -38,6 +34,7 @@ struct Cli {
     /// The main topic to teach
     topic: String,
 }
+
 
 
 

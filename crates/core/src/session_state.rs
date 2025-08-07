@@ -1,4 +1,4 @@
-use feynman_core::{
+use crate::{
     reviewer::ReviewerClient,
     topic::{SubTopic, SubTopicList},
 };
