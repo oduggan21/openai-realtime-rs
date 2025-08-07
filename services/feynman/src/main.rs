@@ -1,14 +1,14 @@
 mod config;
 
 use crate::config::{Config, INPUT_CHUNK_SIZE, OUTPUT_CHUNK_SIZE, OUTPUT_LATENCY_MS};
-use feynman_native_utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
 use anyhow::{Context, Result};
 use clap::Parser;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{FrameCount, StreamConfig};
-use feynman_core::reviewer::ReviewerClient;
+use feynman_core::reviewer::{Reviewer, ReviewerClient};
 use feynman_core::session_state::FeynmanSession;
 use feynman_core::topic::{SubTopic, SubTopicList, Topic};
+use feynman_native_utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
 use openai_realtime::types::audio::Base64EncodedAudioBytes;
 use openai_realtime::types::audio::{ServerVadTurnDetection, TurnDetection};
 use ringbuf::traits::{Consumer, Producer, Split};
@@ -293,7 +293,7 @@ async fn main() -> Result<()> {
                 openai_realtime::types::events::ServerEvent::ConversationItemInputAudioTranscriptionCompleted(data ) => {
                     let segment = data.transcript().trim().to_owned();
                     tracing::info!("User said: \"{}\"", segment);
-                    FeynmanSession::process_segment(&mut session, &reviewer2, segment).await;
+                    FeynmanSession::process_segment(&mut session, &*reviewer2, segment).await;
                 }
                 
                 // If we receive response audio, send it to the post-processing channel.
