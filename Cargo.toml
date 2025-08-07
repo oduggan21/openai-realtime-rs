@@ -7,7 +7,6 @@ edition = "2024"
 members = [ "crates/openai-realtime", "crates/openai-realtime-types", "crates/native-utils", "services/feynman", "crates/core"]
 
 [dev-dependencies]
-feynman-native-utils = { path = "./crates/native-utils" }
 openai-realtime-types = { path = "./crates/openai-realtime-types" }
 openai-realtime = { path = "./crates/openai-realtime" }
 tokio = { workspace = true }
@@ -34,8 +33,3 @@ tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 anyhow = "1.0.98"
-
-[[example]]
-name = "voice"
-path = "examples/voice.rs"
-

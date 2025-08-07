@@ -1,4 +1,4 @@
-use openai_realtime_types::{Item, MessageRole};
+use feynman_service::llm_types::{Item, MessageRole};
 
 #[tokio::main]
 async fn main() {
