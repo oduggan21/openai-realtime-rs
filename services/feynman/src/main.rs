@@ -546,3 +546,129 @@ async fn main() -> Result<()> {
     tracing::info!("Shutting down...");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockall::mock;
+    use rubato::ResampleError;
+
+    /// A dummy resampler for testing purposes that correctly implements the Resampler trait.
+    struct DummyResampler;
+    impl Resampler<f32> for DummyResampler {
+        fn process<V: AsRef<[f32]>>(
+            &mut self,
+            _waves_in: &[V],
+            _active_channels_mask: Option<&[bool]>,
+        ) -> Result<Vec<Vec<f32>>, ResampleError> {
+            Ok(vec![vec![]])
+        }
+
+        fn process_into_buffer<Vin: AsRef<[f32]>, Vout: AsMut<[f32]>>(
+            &mut self,
+            _waves_in: &[Vin],
+            waves_out: &mut [Vout],
+            _active_channels_mask: Option<&[bool]>,
+        ) -> Result<(usize, usize), ResampleError> {
+            let nbr_frames = waves_out[0].as_mut().len();
+            for chan in waves_out.iter_mut() {
+                for sample in chan.as_mut().iter_mut() {
+                    *sample = 0.0;
+                }
+            }
+            Ok((0, nbr_frames))
+        }
+
+        fn input_frames_next(&self) -> usize {
+            1024
+        }
+        fn input_frames_max(&self) -> usize {
+            1024
+        }
+        fn output_frames_next(&self) -> usize {
+            1024
+        }
+        fn output_frames_max(&self) -> usize {
+            1024
+        }
+        fn nbr_channels(&self) -> usize {
+            1
+        }
+        fn output_delay(&self) -> usize {
+            0
+        }
+        fn set_resample_ratio(&mut self, _new_ratio: f64, _ramp: bool) -> Result<(), ResampleError> {
+            Ok(())
+        }
+        fn set_resample_ratio_relative(
+            &mut self,
+            _ratio_factor: f64,
+            _ramp: bool,
+        ) -> Result<(), ResampleError> {
+            Ok(())
+        }
+        fn reset(&mut self) {}
+    }
+
+    // Define the mock object for our RealtimeApi trait
+    mock! {
+        pub RealtimeApi {}
+        #[async_trait]
+        impl RealtimeApi for RealtimeApi {
+            async fn update_session(&mut self, config: openai_realtime::types::Session) -> Result<()>;
+            async fn append_input_audio_buffer(&mut self, audio: Base64EncodedAudioBytes) -> Result<()>;
+            async fn create_conversation_item(&mut self, item: openai_realtime::types::Item) -> Result<()>;
+            async fn create_response(&mut self) -> Result<()>;
+            async fn server_events(&mut self) -> Result<openai_realtime::ServerRx>;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_input_create_spoken_response() {
+        // --- Arrange ---
+        let mut mock_api = MockRealtimeApi::new();
+        let question_text = "What is the meaning of life?".to_string();
+
+        // Set up expectations on the mock API.
+        // We expect `create_conversation_item` to be called once with a specific payload.
+        mock_api
+            .expect_create_conversation_item()
+            .withf(move |item| {
+                if let openai_realtime::types::Item::Message(msg) = item {
+                    if msg.role() == openai_realtime::types::MessageRole::System {
+                        if let Some(openai_realtime::types::Content::InputText(content)) =
+                            msg.content().get(0)
+                        {
+                            return content.text() == question_text;
+                        }
+                    }
+                }
+                false
+            })
+            .times(1)
+            .returning(|_| Ok(()));
+
+        // We expect `create_response` to be called once, after the item is created.
+        mock_api
+            .expect_create_response()
+            .times(1)
+            .returning(|| Ok(()));
+
+        let mut handler = ClientHandler {
+            realtime_api: mock_api,
+            ai_speaking: false,
+            initialized: true,
+            buffer: VecDeque::new(),
+            in_resampler: DummyResampler,
+        };
+
+        let input = Input::CreateSpokenResponse("What is the meaning of life?".to_string());
+
+        // --- Act ---
+        let result = handler.handle_input(input).await;
+
+        // --- Assert ---
+        assert!(result.is_ok());
+        // The mock assertions automatically verify that the expected calls were made.
+    }
+}
