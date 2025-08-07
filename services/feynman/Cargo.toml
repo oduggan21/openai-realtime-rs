@@ -1,12 +1,12 @@
 [package]
-name = "feynman-app"
+name = "feynman-service"
 version = "0.1.0"
 edition = "2024"
 
 
 [dependencies]
-feynman-core = { path = "../crates/core" }
-openai-realtime = { path = "../crates/openai-realtime" , features = ["utils"]}
+feynman-core = { path = "../../crates/core" }
+openai-realtime = { path = "../../crates/openai-realtime" , features = ["utils"]}
 cpal = "0.15.3"
 ringbuf = "0.4.7"
 tokio = { version = "1", features = ["full"] }
