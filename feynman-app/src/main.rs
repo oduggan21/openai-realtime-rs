@@ -18,12 +18,12 @@ use openai_realtime::types::audio::{TurnDetection, ServerVadTurnDetection};
 
 mod topic;
 mod reviewer;
-mod sessionState;
+mod session_state;
 
 
 use topic::{TopicBuffer, TopicChange, Topic, SubTopic, SubTopicList};
 use reviewer::{ReviewerClient, AnalysisOut};
-use sessionState::{FeynmanState, FeynmanSession};
+use session_state::{FeynmanState, FeynmanSession};
 
 
 const INPUT_CHUNK_SIZE: usize = 1024;
