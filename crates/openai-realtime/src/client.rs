@@ -17,8 +17,8 @@ pub type ClientTx = tokio::sync::mpsc::Sender<types::ClientEvent>;
 type ServerTx = tokio::sync::broadcast::Sender<types::ServerEvent>;
 pub type ServerRx = tokio::sync::broadcast::Receiver<types::ServerEvent>;
 
-//contains the capacity which sets the size of the channels, our client and server transmitters, config
-//and stats which is gaurded
+// Contains the capacity for channels, client/server transmitters, configuration,
+// and stats guarded by a Mutex.
 pub struct Client {
     capacity: usize,
     config: config::Config,
@@ -39,42 +39,42 @@ impl Client {
     }
 
     async fn connect(&mut self) -> Result<()> {
-        //ensure that we haven't already connected
+        // Ensure that we haven't already connected.
         if self.c_tx.is_some() {
-            // Use anyhow's error type
+            // Use anyhow's error type for clear error messages.
             return Err(anyhow::anyhow!("already connected"));
         }
 
-        //create a request using the build request function
+        // Create a request using the build_request function.
         let request = utils::build_request(&self.config)?;
 
-        //get a tcpStream object
+        // Get a WebSocket stream object.
         let (ws_stream, _) = tokio_tungstenite::connect_async(request).await?;
 
-        //split the websocket into read and write
+        // Split the WebSocket into read and write halves.
         let (mut write, mut read) = ws_stream.split();
 
-        //create the channels to hold events to send and reveive
+        // Create the channels to hold events to send and receive.
         let (c_tx, mut c_rx) = tokio::sync::mpsc::channel(self.capacity);
-        //create the server transmitter that will broadcast out to client recievers
+        // Create the server transmitter that will broadcast out to client receivers.
         let (s_tx, _) = tokio::sync::broadcast::channel(self.capacity);
 
-        //clone the server and client transmitters into the struct
+        // Store the server and client transmitters in the struct.
         self.c_tx = Some(c_tx.clone());
         self.s_tx = Some(s_tx.clone());
 
-        //this function creates a listening task that will listen for events on the client recieving channel
+        // This task listens for events on the client receiving channel.
         tokio::spawn(async move {
             while let Some(event) = c_rx.recv().await {
                 match serde_json::to_string(&event) {
-                    //take the json event and attempt to send it using our websocket
+                    // Take the JSON event and attempt to send it using our WebSocket.
                     Ok(text) => {
-                        //if we hav an error sending message output it
+                        // If we have an error sending the message, output it.
                         if let Err(e) = write.send(Message::Text(text)).await {
                             tracing::error!("failed to send message: {}", e);
                         }
                     }
-                    //if we get an error converting the json say we failed to seriailze it
+                    // If we get an error converting to JSON, log the serialization failure.
                     Err(e) => {
                         tracing::error!("failed to serialize event: {}", e);
                     }
@@ -83,15 +83,13 @@ impl Client {
         });
 
         let stats = self.stats.clone();
-        //spawn event to listen to server event and transmit those out, we first need to ensure we can get a message
-        //next we need to verify the message type(text, binary, close), then we need to get the event type
-        //we use the read websocket channel to receive messages
-        //we use server transmitter to broadcast events
-        //
+        // Spawn a task to listen for server events and transmit them.
+        // We first need to ensure we can get a message, then verify its type (text, binary, close),
+        // and finally determine the event type.
+        // We use the `read` half of the WebSocket to receive messages and the `s_tx` to broadcast events.
         tokio::spawn(async move {
-            //get the message from the websocket, it will come in json format
+            // Get the message from the WebSocket, which will be in JSON format.
             while let Some(message) = read.next().await {
-                //message will be equal to the message received or
                 let message = match message {
                     Err(e) => {
                         tracing::error!("failed to read message: {}", e);
@@ -99,31 +97,30 @@ impl Client {
                     }
                     Ok(message) => message,
                 };
-                //at this point we have the message
-                //match the message variant to text, binary, or close
+                // At this point, we have the message.
+                // Match the message variant to handle text, binary, or close messages.
                 match message {
                     Message::Text(text) => {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                            //get the event type as a string
-                            let event_type = json.get("type").map(|v| v.as_str()).flatten();
-                            //get the event id as a string
-                            let event_id = json.get("event_id").map(|v| v.as_str()).flatten();
-                            //track the messages
+                            // Get the event type and ID as strings for logging.
+                            let event_type = json.get("type").and_then(|v| v.as_str());
+                            let event_id = json.get("event_id").and_then(|v| v.as_str());
+                            // Track the received messages.
                             tracing::debug!(
                                 "received message: {}, id={}",
                                 event_type.unwrap_or("unknown"),
                                 event_id.unwrap_or("unknown")
                             );
                         }
-                        //match the servent event enum variant or get an error
+                        // Match the server event enum variant or handle the error.
                         match serde_json::from_str::<types::ServerEvent>(&text) {
                             Ok(event) => {
-                                //send the server event across the transmitting server channel
+                                // Send the server event across the transmitting server channel.
                                 if let Err(e) = s_tx.send(event.clone()) {
                                     tracing::error!("failed to send event: {}", e);
                                 }
 
-                                //if the server is done responding record its usage stats
+                                // If the server is done responding, record its usage stats.
                                 if let types::ServerEvent::ResponseDone(response) = event {
                                     if let Some(usage) = response.response().usage() {
                                         let total_tokens = usage.total_tokens();
@@ -149,7 +146,7 @@ impl Client {
                                     }
                                 }
                             }
-                            //error message to say that we couldn't properly detect the server event
+                            // Log an error if we couldn't properly deserialize the server event.
                             Err(e) => {
                                 let json = serde_json::from_str::<serde_json::Value>(&text);
                                 json.map(|json| {
@@ -166,15 +163,14 @@ impl Client {
                                         text
                                     );
                                 });
-                                // tracing::error!("failed to deserialize event: {}, text=> {:?}", e, json);
                             }
                         }
                     }
-                    //we get a binary message and not json
+                    // We received a binary message, not JSON.
                     Message::Binary(bin) => {
                         tracing::warn!("unexpected binary message: {:?}", bin);
                     }
-                    //we got that the websocket is closed
+                    // The WebSocket connection was closed.
                     Message::Close(reason) => {
                         tracing::info!("connection closed: {:?}", reason);
                         let close_event = types::ServerEvent::Close {
@@ -194,8 +190,7 @@ impl Client {
         Ok(())
     }
 
-    //get a server receiver that we can use to receive server events
-
+    // Get a server receiver that we can use to receive server events.
     pub async fn server_events(&mut self) -> Result<ServerRx> {
         match self.s_tx {
             Some(ref tx) => Ok(tx.subscribe()),
@@ -203,8 +198,7 @@ impl Client {
         }
     }
 
-    //return a status objct that we can use to inspect that stats
-
+    // Return a stats object that we can use to inspect the stats.
     pub fn stats(&self) -> Result<Stats> {
         if let Ok(stats_guard) = self.stats.lock() {
             Ok(stats_guard.clone())
@@ -213,8 +207,7 @@ impl Client {
         }
     }
 
-    ///send the client event
-
+    /// Send a client event.
     async fn send_client_event(&mut self, event: types::ClientEvent) -> Result<()> {
         match self.c_tx {
             Some(ref tx) => {
@@ -225,7 +218,7 @@ impl Client {
         }
     }
 
-    //function to send update session event
+    // Function to send an update session event.
     pub async fn update_session(&mut self, config: Session) -> Result<()> {
         let event = types::ClientEvent::SessionUpdate(
             types::events::client::SessionUpdateEvent::new(config),
@@ -233,7 +226,7 @@ impl Client {
         self.send_client_event(event).await
     }
 
-    //funciton to send input audio buffer event
+    // Function to send an input audio buffer event.
     pub async fn append_input_audio_buffer(
         &mut self,
         audio: Base64EncodedAudioBytes,
@@ -244,7 +237,7 @@ impl Client {
         self.send_client_event(event).await
     }
 
-    //function to send conversation item event
+    // Function to send a conversation item event.
     pub async fn create_conversation_item(&mut self, item: types::Item) -> Result<()> {
         let event = types::ClientEvent::ConversationItemCreate(
             types::events::client::ConversationItemCreateEvent::new(item),
@@ -252,14 +245,14 @@ impl Client {
         self.send_client_event(event).await
     }
 
-    //function to send create response event
+    // Function to send a create response event.
     pub async fn create_response(&mut self) -> Result<()> {
         let event =
             types::ClientEvent::ResponseCreate(types::events::client::ResponseCreateEvent::new());
         self.send_client_event(event).await
     }
 
-    //function to send create response with specfic config event
+    // Function to send a create response event with a specific config.
     pub async fn create_response_with_config(&mut self, config: Session) -> Result<()> {
         let event = types::ClientEvent::ResponseCreate(
             types::events::client::ResponseCreateEvent::new().with_update_session(config),
@@ -268,17 +261,17 @@ impl Client {
     }
 }
 
-//public function to create client with specific config and connect to open ai
+// Public function to create a client with specific config and connect to OpenAI.
 pub async fn connect_with_config(capacity: usize, config: config::Config) -> Result<Client> {
     let mut client = Client::new(capacity, config);
     client.connect().await?;
     Ok(client)
 }
 
-//public function
+// Public function to connect with default settings.
 pub async fn connect() -> Result<Client> {
-    //create the default config object
+    // Create the default config object.
     let config = config::Config::new();
-    //call connect with config
+    // Call connect_with_config using the default config.
     connect_with_config(1024, config).await
 }

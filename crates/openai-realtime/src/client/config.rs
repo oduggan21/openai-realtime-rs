@@ -28,44 +28,46 @@ impl ConfigBuilder {
         self.config.api_key = SecretString::from(api_key.to_string());
         self
     }
-    
+
     pub fn with_model(mut self, model: &str) -> Self {
         self.config.model = model.to_string();
         self
     }
-    
+
     pub fn build(self) -> Config {
         self.config
     }
 }
 
 impl Config {
-    //set the default values
-   pub fn new() -> Self {
+    // Sets the default values.
+    pub fn new() -> Self {
         Self {
-            //convert the &str to String
+            // Convert the &str to String.
             base_url: "wss://api.openai.com/v1".to_string(),
-            //get the API key from the environment variable
-            //unwrap the Result and handle it so we don't panic
-            //convert api_key to SecretString if necesary
-            api_key: std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "".to_string()).into(),
-            //declare the defualt model
+            // Get the API key from the environment variable.
+            // Unwrap the Result and handle it so we don't panic.
+            // Convert api_key to SecretString if necessary.
+            api_key: std::env::var("OPENAI_API_KEY")
+                .unwrap_or_else(|_| "".to_string())
+                .into(),
+            // Declare the default model.
             model: "gpt-4o-realtime-preview-2024-10-01".to_string(),
         }
     }
-    
+
     pub fn builder() -> ConfigBuilder {
         ConfigBuilder::new()
     }
-    
+
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
-    
+
     pub fn api_key(&self) -> &SecretString {
         &self.api_key
     }
-    
+
     pub fn model(&self) -> &str {
         &self.model
     }

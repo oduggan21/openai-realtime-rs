@@ -1,4 +1,8 @@
 use crate::topic::SubTopic;
+use anyhow::Result;
+use async_trait::async_trait;
+#[cfg(test)]
+use mockall::automock;
 use reqwest::Client;
 use serde::Deserialize;
 
@@ -15,6 +19,46 @@ pub struct Choice {
 #[derive(Debug, Deserialize)]
 pub struct Message {
     pub content: String,
+}
+
+// The `Reviewer` trait defines the contract for any service that can analyze
+// student explanations. This abstraction is key to the Dependency Inversion Principle,
+// allowing high-level logic (like `FeynmanSession`) to depend on this abstraction
+// rather than a concrete implementation.
+//
+// This design makes the system more modular and testable. For example, in unit tests,
+// we can use `mockall`'s `MockReviewer` to simulate different API responses without
+// making real network calls, which is faster, more reliable, and free.
+// This abstraction also makes the application more flexible, as it can be used
+// across different frontends like a web app, CLI, or TUI.
+//
+// The `#[async_trait]` macro is used because Rust traits do not natively support
+// async functions yet. `#[cfg_attr(test, automock)]` tells `mockall` to generate
+// a mock implementation of this trait, but only when compiling for tests.
+#[async_trait]
+#[cfg_attr(test, automock)]
+pub trait Reviewer {
+    async fn looks_like_topic_change(
+        &self,
+        context_buffer: &str,
+        new_segment: &str,
+    ) -> Result<String>;
+
+    async fn analyze_topic(&self, segment: &str, detected_subtopics: &[SubTopic])
+    -> Result<String>;
+
+    async fn check_answer_satisfies_question(&self, segment: &str, question: &str) -> Result<bool>;
+
+    async fn generate_subtopics(&self, topic: &str) -> Result<Vec<String>>;
+
+    async fn analyze_last_explained_context(
+        &self,
+        segment: &str,
+        main_topic: &str,
+        subtopic_list: &[String],
+    ) -> Result<String>;
+
+    async fn analyze_answer(&self, question: &str, answer: &str) -> Result<bool>;
 }
 
 pub struct ReviewerClient {
@@ -37,12 +81,20 @@ impl ReviewerClient {
             model,
         }
     }
+}
 
-    pub async fn looks_like_topic_change(
+// This block implements the `Reviewer` trait for the `ReviewerClient`.
+// It contains the actual logic for making calls to the OpenAI API.
+// By separating the implementation from the `FeynmanSession`, we can easily
+// swap this out with other implementations in the future (e.g., a client for
+// a different LLM provider) without changing any of the core application logic.
+#[async_trait]
+impl Reviewer for ReviewerClient {
+    async fn looks_like_topic_change(
         &self,
         context_buffer: &str,
         new_segment: &str,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String> {
         let prompt = format!(
             "Given this context:\n \"{context_buffer}\"\n and this new segment: \n\"{new_segment}\"\nDoes the new segment continue the same concept within the topic, when I ask if it continues the same concept I mean someone could be teaching you about football and specifically talking about touchdowns where they talk about how touchdowns are scored, that fits within the concept, but if they start talking about field goals than that is a new concept and you want to say its a new concept? If not, what is the new concept? Respond as JSON: {{\"topic_change\": <true/false>, \"new_topic\": <string or null>}}"
         );
@@ -75,11 +127,11 @@ impl ReviewerClient {
         Ok(answer.clone())
     }
 
-    pub async fn analyze_topic(
+    async fn analyze_topic(
         &self,
         segment: &str,
         detected_subtopics: &[SubTopic],
-    ) -> anyhow::Result<String> {
+    ) -> Result<String> {
         let subtopic_names = detected_subtopics
             .iter()
             .map(|s| s.name.as_str())
@@ -159,11 +211,7 @@ impl ReviewerClient {
 
         Ok(normalized)
     }
-    pub async fn check_answer_satisfies_question(
-        &self,
-        segment: &str,
-        question: &str,
-    ) -> anyhow::Result<bool> {
+    async fn check_answer_satisfies_question(&self, segment: &str, question: &str) -> Result<bool> {
         let prompt = format!(
             r#"Given the following teacher answer segment:
             ---
@@ -213,7 +261,7 @@ impl ReviewerClient {
 
         Ok(satisfies)
     }
-    pub async fn generate_subtopics(&self, topic: &str) -> anyhow::Result<Vec<String>> {
+    async fn generate_subtopics(&self, topic: &str) -> Result<Vec<String>> {
         let prompt = format!(
             "List all the key subtopics and concepts someone should cover to thoroughly teach the topic \"{topic}\" to a beginner. \
         Respond ONLY as a numbered list of subtopic names (no explanations)."
@@ -259,12 +307,12 @@ impl ReviewerClient {
         Ok(subtopics)
     }
 
-    pub async fn analyze_last_explained_context(
+    async fn analyze_last_explained_context(
         &self,
         segment: &str,
         main_topic: &str,
         subtopic_list: &[String],
-    ) -> anyhow::Result<String> {
+    ) -> Result<String> {
         // If segment is blank, nudge user to continue
         if segment.trim().is_empty() {
             return Ok(
@@ -322,7 +370,7 @@ impl ReviewerClient {
         Ok(answer.trim().to_string())
     }
 
-    pub async fn analyze_answer(&self, question: &str, answer: &str) -> anyhow::Result<bool> {
+    async fn analyze_answer(&self, question: &str, answer: &str) -> Result<bool> {
         let prompt = format!(
             r#"You are evaluating a student's answer in a Feynman teaching session.
 
@@ -384,8 +432,11 @@ mod tests {
     use crate::topic::SubTopic;
     use std::env;
 
-    // This test will run only if you have a valid API key in your environment
+    // This is an integration test that makes a live call to the OpenAI API.
+    // It is ignored by default to allow `cargo test` to run without requiring a live
+    // API key. To run this test, use `cargo test -- --ignored`.
     #[tokio::test]
+    #[ignore]
     async fn test_generate_subtopics_for_os() {
         dotenvy::dotenv_override().ok();
         let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
@@ -408,7 +459,9 @@ mod tests {
         }
     }
 
+    // This is an integration test. See the note on `test_generate_subtopics_for_os`.
     #[tokio::test]
+    #[ignore]
     async fn test_analyze_topic_basic() {
         dotenvy::dotenv_override().ok();
         let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");
@@ -482,7 +535,9 @@ mod tests {
         }
     }
 
+    // This is an integration test. See the note on `test_generate_subtopics_for_os`.
     #[tokio::test]
+    #[ignore]
     async fn test_analyze_answer() {
         dotenvy::dotenv_override().ok();
         let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY not set");

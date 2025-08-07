@@ -1,7 +1,6 @@
-use crate::audio::Base64EncodedAudioBytes;
 use crate::Item;
+use crate::audio::Base64EncodedAudioBytes;
 use crate::session::Session;
-
 
 /// `session.update` event
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -34,7 +33,6 @@ impl SessionUpdateEvent {
 pub struct InputAudioBufferAppendEvent {
     event_id: Option<String>,
 
-
     /// The audio data to append to the buffer
     audio: Base64EncodedAudioBytes,
 }
@@ -56,7 +54,7 @@ impl InputAudioBufferAppendEvent {
     }
 }
 
-//tells us when we are done sendinging audio
+// Tells us when we are done sending audio.
 /// `input_audio_buffer.commit` event
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InputAudioBufferCommitEvent {
@@ -65,9 +63,7 @@ pub struct InputAudioBufferCommitEvent {
 
 impl InputAudioBufferCommitEvent {
     pub fn new() -> Self {
-        Self {
-            event_id: None,
-        }
+        Self { event_id: None }
     }
     pub fn with_event_id(mut self, event_id: &str) -> Self {
         self.event_id = Some(event_id.to_string());
@@ -83,9 +79,7 @@ pub struct InputAudioBufferClearEvent {
 
 impl InputAudioBufferClearEvent {
     pub fn new() -> Self {
-        Self {
-            event_id: None,
-        }
+        Self { event_id: None }
     }
     pub fn with_event_id(mut self, event_id: &str) -> Self {
         self.event_id = Some(event_id.to_string());
@@ -97,7 +91,6 @@ impl InputAudioBufferClearEvent {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConversationItemCreateEvent {
     event_id: Option<String>,
-
 
     /// The ID of the preceding item after which the new item will be inserted
     pub previous_item_id: Option<String>,
@@ -128,7 +121,6 @@ impl ConversationItemCreateEvent {
 pub struct ConversationItemTruncateEvent {
     event_id: Option<String>,
 
-
     /// The ID of the assistant message item to truncate.
     pub item_id: String,
     /// The index of the content part to truncate
@@ -157,7 +149,6 @@ impl ConversationItemTruncateEvent {
 pub struct ConversationItemDeleteEvent {
     event_id: Option<String>,
 
-
     /// The ID of the item to delete
     pub item_id: String,
 }
@@ -179,7 +170,6 @@ impl ConversationItemDeleteEvent {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ResponseCreateEvent {
     event_id: Option<String>,
-
 
     /// Configuration for the response
     response: Option<Session>,
@@ -212,14 +202,11 @@ impl ResponseCreateEvent {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ResponseCancelEvent {
     event_id: Option<String>,
-
 }
 
 impl ResponseCancelEvent {
     pub fn new() -> Self {
-        Self {
-            event_id: None,
-        }
+        Self { event_id: None }
     }
     pub fn with_event_id(mut self, event_id: &str) -> Self {
         self.event_id = Some(event_id.to_string());
