@@ -25,7 +25,8 @@ pub enum Input {
     Initialized(),
     AISpeaking(),
     AISpeakingDone(),
-    CreateConversationItem(openai_realtime::types::Item),
+    /// Command to the `client_handle` to create a spoken response from the AI.
+    CreateSpokenResponse(String),
 }
 
 #[derive(Parser)]
@@ -345,17 +346,13 @@ async fn main() -> Result<()> {
             match command {
                 feynman_core::Command::SpeakText(text) => {
                     tracing::info!("COMMAND RECEIVED: Speak Text: '{}'", text);
-                    // TODO: In a future PR, this will trigger the OpenAI client to synthesize speech.
-                    // For now, we just log that we received the command.
-                    let item = openai_realtime::types::MessageItem::builder()
-                        .with_role(openai_realtime::types::MessageRole::System)
-                        .with_input_text(&text)
-                        .build();
-                    
-                    // We need a channel to send this command over to the client_handle
-                    // Let's reuse the 'input_tx' for this.
-                    if let Err(e) = input_tx_for_cmd_handler.send(Input::CreateConversationItem(openai_realtime::types::Item::Message(item))).await {
-                         tracing::error!("Failed to send CreateConversationItem command: {:?}", e);
+                    // Send a command to the client_handle task, telling it to
+                    // create a conversation item and trigger TTS.
+                    if let Err(e) = input_tx_for_cmd_handler
+                        .send(Input::CreateSpokenResponse(text))
+                        .await
+                    {
+                        tracing::error!("Failed to send CreateSpokenResponse command: {:?}", e);
                     }
                 }
                 feynman_core::Command::SessionComplete(message) => {
@@ -454,9 +451,26 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                Input::CreateConversationItem(item) => {
-                    realtime_api.create_conversation_item(item).await.context("Failed to create conversation item")?;
-                    realtime_api.create_response().await.context("Failed to trigger response after creating item")?;
+                Input::CreateSpokenResponse(text) => {
+                    // 1. Create a message item for the system/assistant to say.
+                    //    We use the "system" role to inject instructions for the AI to speak.
+                    let item = openai_realtime::types::MessageItem::builder()
+                        .with_role(openai_realtime::types::MessageRole::System)
+                        .with_input_text(&text)
+                        .build();
+
+                    // 2. Send this item to the conversation history.
+                    realtime_api
+                        .create_conversation_item(openai_realtime::types::Item::Message(item))
+                        .await
+                        .context("Failed to create conversation item for AI speech")?;
+
+                    // 3. Trigger a response, which will cause the OpenAI server
+                    //    to read the last message (the one we just sent) and generate audio for it.
+                    realtime_api
+                        .create_response()
+                        .await
+                        .context("Failed to trigger response for AI speech")?;
                 }
             }
             Ok(())
