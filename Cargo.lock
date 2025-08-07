@@ -490,7 +490,6 @@ dependencies = [
  "futures",
  "futures-util",
  "hound",
- "openai-realtime-types",
  "openai-realtime-utils",
  "ringbuf",
  "rubato",

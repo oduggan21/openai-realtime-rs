@@ -11,7 +11,7 @@ rustls = ["tokio-tungstenite/rustls-tls-native-roots"]
 utils = ["openai-realtime-utils"]
 
 [dependencies]
-openai-realtime-types = { path = "../../types" }
+openai-realtime-types = { path = "../openai-realtime-types" }
 openai-realtime-utils = { path = "../../utils", optional = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
