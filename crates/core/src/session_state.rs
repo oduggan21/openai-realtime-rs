@@ -18,7 +18,7 @@ pub struct QuestionForSubtopic {
     pub question: String,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum FeynmanState {
     Listening,
     Analyzing,
@@ -69,7 +69,8 @@ impl FeynmanSession {
         segment: String,
         command_tx: tokio::sync::mpsc::Sender<Command>,
     ) {
-        match session.state {
+        let state_before = session.state.clone();
+        match state_before {
             // In the listening state, we check if we have temp context from a previous leftover segment and add it to the new segment.
             FeynmanState::Listening => {
                 // If temp_context_buffer is not empty, combine it with the new segment.
@@ -101,8 +102,19 @@ impl FeynmanSession {
                 session.in_between_buffer.push(segment);
             }
             FeynmanState::AnalyzingAnswers => {
+                // A new segment has arrived while we are waiting for an answer.
+                // We treat this as the answer (or part of it).
                 session.answer_buffer.push(segment);
-                session.answer_notify.notify_one()
+
+                // Now, we trigger the analysis of the answer.
+                // The `analyze_answer` function will handle the rest of the logic.
+                if let Err(e) = session.analyze_answer(reviewer, command_tx).await {
+                    tracing::error!(
+                        "Error analyzing answer: {:?}. Resetting to Listening state.",
+                        e
+                    );
+                    session.state = FeynmanState::Listening;
+                }
             }
         }
     }
@@ -275,12 +287,10 @@ impl FeynmanSession {
             return Err(anyhow::anyhow!("No current question to analyze answer for"));
         };
 
-        // Wait for the answer buffer to have content.
-        loop {
-            if !self.answer_buffer.is_empty() {
-                break;
-            }
-            self.answer_notify.notified().await;
+        // The waiting loop is removed. This function is now triggered by `process_segment`.
+        // If the answer buffer is empty, it means this is a spurious call, so we can just return.
+        if self.answer_buffer.is_empty() {
+            return Ok(());
         }
 
         // Combine answer segments into a single string.
@@ -308,7 +318,18 @@ impl FeynmanSession {
 
         // Clear the buffer for the next answer.
         self.answer_buffer.clear();
-        // Move to the next question.
+
+        // Ask the next question or conclude the batch.
+        self.ask_next_question(command_tx).await?;
+
+        Ok(())
+    }
+
+    // Helper to manage the question-asking loop.
+    async fn ask_next_question(
+        &mut self,
+        command_tx: tokio::sync::mpsc::Sender<Command>,
+    ) -> Result<()> {
         self.current_question_idx += 1;
 
         if self.current_question_idx < self.question_queue.len() {
@@ -319,24 +340,27 @@ impl FeynmanSession {
                 .await
                 .context("Failed to send next SpeakText command")?;
             // The state remains AnalyzingAnswers, as we are now waiting for the next answer.
+            self.state = FeynmanState::AnalyzingAnswers;
         } else {
-            // All questions for this batch have been answered.
-            let final_message =
-                "Great, you've answered all the questions for now. Let's continue.".to_string();
-            command_tx
-                .send(Command::SessionComplete(final_message))
-                .await
-                .context("Failed to send SessionComplete command")?;
-
-            // Reset state and queues, ready to listen for the next topic explanation.
+            // All questions for this batch have been asked.
             self.question_queue.clear();
             self.current_question_idx = 0;
+
+            // Check if the entire session is complete.
+            if self.is_session_complete() {
+                let final_message =
+                    "Congratulations! You've explained all the key subtopics.".to_string();
+                command_tx
+                    .send(Command::SessionComplete(final_message))
+                    .await
+                    .context("Failed to send final SessionComplete command")?;
+                tracing::info!("Session complete! All subtopics covered.");
+            }
+
+            // Reset state to listen for the next explanation.
             self.state = FeynmanState::Listening;
-
-            // TODO: In a future iteration, we should handle the `in_between_buffer` here
-            // to process segments that arrived while questions were being answered.
+            tracing::info!("All questions for this batch answered. Returning to Listening state.");
         }
-
         Ok(())
     }
 
@@ -366,8 +390,16 @@ impl FeynmanSession {
         if let Some(subtopic) = self.incomplete_subtopics.get(subtopic_name) {
             subtopic.has_definition && subtopic.has_mechanism && subtopic.has_example
         } else {
-            false
+            // If it's not in incomplete, it might be in covered.
+            // But the logic only checks incomplete, which is fine.
+            // If it's not in incomplete, it's considered complete for this check's purpose.
+            self.covered_subtopics.contains_key(subtopic_name)
         }
+    }
+
+    // Helper to check if the entire session is complete.
+    fn is_session_complete(&self) -> bool {
+        self.covered_subtopics.len() == self.subtopic_list.subtopics.len()
     }
 }
 
