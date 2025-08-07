@@ -3,6 +3,7 @@ mod prompt_loader;
 
 use crate::config::{Config, INPUT_CHUNK_SIZE, OUTPUT_CHUNK_SIZE, OUTPUT_LATENCY_MS};
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use clap::Parser;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{FrameCount, StreamConfig};
@@ -13,7 +14,7 @@ use feynman_native_utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
 use openai_realtime::types::audio::Base64EncodedAudioBytes;
 use openai_realtime::types::audio::{ServerVadTurnDetection, TurnDetection};
 use ringbuf::traits::{Consumer, Producer, Split};
-use rubato::Resampler;
+use rubato::{Resampler};
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Arc;
@@ -26,6 +27,7 @@ pub enum Input {
     AISpeaking(),
     AISpeakingDone(),
     /// Command to the `client_handle` to create a spoken response from the AI.
+    /// This triggers a TTS synthesis and playback flow.
     CreateSpokenResponse(String),
 }
 
@@ -33,6 +35,155 @@ pub enum Input {
 struct Cli {
     /// The main topic to teach
     topic: String,
+}
+
+/// A trait abstracting the `openai_realtime::Client` to allow for mocking in tests.
+/// This defines the contract for the operations our application needs from the realtime API client.
+#[async_trait]
+pub trait RealtimeApi: Send {
+    async fn update_session(&mut self, config: openai_realtime::types::Session) -> Result<()>;
+    async fn append_input_audio_buffer(&mut self, audio: Base64EncodedAudioBytes) -> Result<()>;
+    async fn create_conversation_item(&mut self, item: openai_realtime::types::Item) -> Result<()>;
+    async fn create_response(&mut self) -> Result<()>;
+    async fn server_events(&mut self) -> Result<openai_realtime::ServerRx>;
+}
+
+/// Implements the `RealtimeApi` trait for the actual `openai_realtime::Client`.
+/// This implementation simply delegates the calls to the real client.
+#[async_trait]
+impl RealtimeApi for openai_realtime::Client {
+    async fn update_session(&mut self, config: openai_realtime::types::Session) -> Result<()> {
+        self.update_session(config).await
+    }
+    async fn append_input_audio_buffer(&mut self, audio: Base64EncodedAudioBytes) -> Result<()> {
+        self.append_input_audio_buffer(audio).await
+    }
+    async fn create_conversation_item(&mut self, item: openai_realtime::types::Item) -> Result<()> {
+        self.create_conversation_item(item).await
+    }
+    async fn create_response(&mut self) -> Result<()> {
+        self.create_response().await
+    }
+    async fn server_events(&mut self) -> Result<openai_realtime::ServerRx> {
+        self.server_events().await
+    }
+}
+
+/// Manages the state and logic for interacting with the OpenAI Realtime API.
+/// This struct encapsulates the client-side logic, making it testable and easier to reason about.
+struct ClientHandler<T: RealtimeApi, R: Resampler<f32> + Send> {
+    realtime_api: T,
+    ai_speaking: bool,
+    initialized: bool,
+    buffer: VecDeque<f32>,
+    in_resampler: R,
+}
+
+impl<T: RealtimeApi, R: Resampler<f32> + Send> ClientHandler<T, R> {
+    /// Processes a single `Input` event, updating state and interacting with the Realtime API.
+    /// This function contains the core client-side logic for handling audio, state changes, and commands.
+    async fn handle_input(&mut self, i: Input) -> Result<()> {
+        match i {
+            Input::Initialize() => {
+                let instructions = r#"You are a curious student in a Feynman session.
+                        - You know ONLY what the teacher just said.
+                        - When you receive one or more questions (one per line), read them and ask them out loud, one-by-one, in order.
+                        - Do NOT answer questions or add information. Do NOT speculate or rephrase the teacher's content.
+                        - If a single clarification question is received, just ask that one and stop.
+                        - Keep each spoken question concise and natural."#;
+
+                let turn_detection = TurnDetection::ServerVad(
+                    ServerVadTurnDetection::default()
+                        .with_interrupt_response(true)
+                        .with_create_response(false),
+                );
+                // Once a connection has been established, update the session with custom parameters.
+                tracing::info!("Initializing session with OpenAI...");
+                let session = openai_realtime::types::Session::new()
+                    .with_modalities_enable_audio()
+                    .with_instructions(instructions)
+                    .with_voice(openai_realtime::types::audio::Voice::Alloy)
+                    .with_input_audio_transcription_enable(
+                        openai_realtime::types::audio::TranscriptionModel::Whisper,
+                    )
+                    .with_turn_detection_enable(turn_detection)
+                    .build();
+                tracing::debug!("Session config: {:?}", serde_json::to_string(&session)?);
+                self.realtime_api
+                    .update_session(session)
+                    .await
+                    .context("Failed to initialize session")?;
+            }
+            Input::Initialized() => {
+                tracing::info!("Session initialized successfully.");
+                self.initialized = true;
+            }
+            Input::AISpeaking() => {
+                if !self.ai_speaking {
+                    tracing::debug!("AI speaking...");
+                }
+                self.buffer.clear();
+                self.ai_speaking = true;
+            }
+            Input::AISpeakingDone() => {
+                if self.ai_speaking {
+                    tracing::debug!("AI speaking done");
+                }
+                self.ai_speaking = false;
+            }
+            Input::Audio(audio) => {
+                if self.initialized && !self.ai_speaking {
+                    self.buffer.extend(audio);
+                    let mut resampled: Vec<f32> = vec![];
+                    while self.buffer.len() >= self.in_resampler.input_frames_next() {
+                        let audio_chunk: Vec<f32> =
+                            self.buffer.drain(..self.in_resampler.input_frames_next()).collect();
+
+                        // The `process` method on the trait returns a new Vec, which is less efficient
+                        // but simpler to use here. The real `FastFixedIn` also has this method.
+                        if let Ok(output_chunk) =
+                            self.in_resampler.process(&[audio_chunk.as_slice()], None)
+                        {
+                            if let Some(channel_data) = output_chunk.first() {
+                                resampled.extend_from_slice(channel_data);
+                            }
+                        }
+                    }
+                    if !resampled.is_empty() {
+                        let audio_bytes = feynman_native_utils::audio::encode(&resampled);
+                        let audio_bytes = Base64EncodedAudioBytes::from(audio_bytes);
+                        self.realtime_api
+                            .append_input_audio_buffer(audio_bytes.clone())
+                            .await
+                            .context("Failed to send audio buffer")?;
+                    }
+                }
+            }
+            // Handles the command to make the AI speak.
+            Input::CreateSpokenResponse(text) => {
+                // This is a two-step process to make the AI speak on demand:
+                // 1. Create a "system" message containing the text we want the AI to say.
+                //    This injects the text into the conversation history.
+                let item = openai_realtime::types::MessageItem::builder()
+                    .with_role(openai_realtime::types::MessageRole::System)
+                    .with_input_text(&text)
+                    .build();
+
+                self.realtime_api
+                    .create_conversation_item(openai_realtime::types::Item::Message(item))
+                    .await
+                    .context("Failed to create conversation item for AI speech")?;
+
+                // 2. Trigger a response. The API will see the last message (the one we just sent)
+                //    and generate audio for it, effectively making the AI speak our provided text.
+                self.realtime_api
+                    .create_response()
+                    .await
+                    .context("Failed to trigger response for AI speech")?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[tokio::main]
@@ -247,7 +398,8 @@ async fn main() -> Result<()> {
             let chunk_size = out_resampler.input_frames_next();
 
             // Send the received audio to the audio buffer for playback.
-            for samples in feynman_native_utils::audio::split_for_chunks(&audio_bytes, chunk_size) {
+            for samples in feynman_native_utils::audio::split_for_chunks(&audio_bytes, chunk_size)
+            {
                 if let Ok(resamples) = out_resampler.process(&[samples.as_slice()], None) {
                     if let Some(resamples) = resamples.first() {
                         for resample in resamples {
@@ -333,7 +485,7 @@ async fn main() -> Result<()> {
     });
 
     // Create a resampler to transform audio from the input device to the sample rate OpenAI's API requires.
-    let mut in_resampler = feynman_native_utils::audio::create_resampler(
+    let in_resampler = feynman_native_utils::audio::create_resampler(
         input_sample_rate as f64,
         REALTIME_API_PCM16_SAMPLE_RATE,
         INPUT_CHUNK_SIZE,
@@ -365,129 +517,17 @@ async fn main() -> Result<()> {
 
     // This task handles client-side logic: sending user audio and managing state.
     let client_handle = tokio::spawn(async move {
-        let mut ai_speaking = false;
-        let mut initialized = false;
-        let mut buffer: VecDeque<f32> = VecDeque::with_capacity(INPUT_CHUNK_SIZE * 2);
-
-        // This inner function allows us to use the `?` operator inside the loop.
-        // The loop itself will continue, but a single failed operation will be logged
-        // and won't crash the task.
-        async fn handle_input(
-            i: Input,
-            realtime_api: &mut openai_realtime::Client,
-            initialized: &mut bool,
-            ai_speaking: &mut bool,
-            buffer: &mut VecDeque<f32>,
-            in_resampler: &mut impl Resampler<f32>,
-        ) -> Result<()> {
-            match i {
-                Input::Initialize() => {
-                    let instructions = r#"You are a curious student in a Feynman session.
-                        - You know ONLY what the teacher just said.
-                        - When you receive one or more questions (one per line), read them and ask them out loud, one-by-one, in order.
-                        - Do NOT answer questions or add information. Do NOT speculate or rephrase the teacher's content.
-                        - If a single clarification question is received, just ask that one and stop.
-                        - Keep each spoken question concise and natural."#;
-
-                    let turn_detection = TurnDetection::ServerVad(
-                        ServerVadTurnDetection::default()
-                            .with_interrupt_response(true)
-                            .with_create_response(false),
-                    );
-                    // Once a connection has been established, update the session with custom parameters.
-                    tracing::info!("Initializing session with OpenAI...");
-                    let session = openai_realtime::types::Session::new()
-                        .with_modalities_enable_audio()
-                        .with_instructions(instructions)
-                        .with_voice(openai_realtime::types::audio::Voice::Alloy)
-                        .with_input_audio_transcription_enable(
-                            openai_realtime::types::audio::TranscriptionModel::Whisper,
-                        )
-                        .with_turn_detection_enable(turn_detection)
-                        .build();
-                    tracing::debug!("Session config: {:?}", serde_json::to_string(&session)?);
-                    realtime_api
-                        .update_session(session)
-                        .await
-                        .context("Failed to initialize session")?;
-                }
-                Input::Initialized() => {
-                    tracing::info!("Session initialized successfully.");
-                    *initialized = true;
-                }
-                Input::AISpeaking() => {
-                    if !*ai_speaking {
-                        tracing::debug!("AI speaking...");
-                    }
-                    buffer.clear();
-                    *ai_speaking = true;
-                }
-                Input::AISpeakingDone() => {
-                    if *ai_speaking {
-                        tracing::debug!("AI speaking done");
-                    }
-                    *ai_speaking = false;
-                }
-                Input::Audio(audio) => {
-                    if *initialized && !*ai_speaking {
-                        buffer.extend(audio);
-                        let mut resampled: Vec<f32> = vec![];
-                        while buffer.len() >= INPUT_CHUNK_SIZE {
-                            let audio_chunk: Vec<f32> = buffer.drain(..INPUT_CHUNK_SIZE).collect();
-                            if let Ok(resamples) = in_resampler.process(&[audio_chunk.as_slice()], None)
-                            {
-                                if let Some(resamples) = resamples.first() {
-                                    resampled.extend(resamples.iter().cloned());
-                                }
-                            }
-                        }
-                        if !resampled.is_empty() {
-                            let audio_bytes = feynman_native_utils::audio::encode(&resampled);
-                            let audio_bytes = Base64EncodedAudioBytes::from(audio_bytes);
-                            realtime_api
-                                .append_input_audio_buffer(audio_bytes.clone())
-                                .await
-                                .context("Failed to send audio buffer")?;
-                        }
-                    }
-                }
-                Input::CreateSpokenResponse(text) => {
-                    // 1. Create a message item for the system/assistant to say.
-                    //    We use the "system" role to inject instructions for the AI to speak.
-                    let item = openai_realtime::types::MessageItem::builder()
-                        .with_role(openai_realtime::types::MessageRole::System)
-                        .with_input_text(&text)
-                        .build();
-
-                    // 2. Send this item to the conversation history.
-                    realtime_api
-                        .create_conversation_item(openai_realtime::types::Item::Message(item))
-                        .await
-                        .context("Failed to create conversation item for AI speech")?;
-
-                    // 3. Trigger a response, which will cause the OpenAI server
-                    //    to read the last message (the one we just sent) and generate audio for it.
-                    realtime_api
-                        .create_response()
-                        .await
-                        .context("Failed to trigger response for AI speech")?;
-                }
-            }
-            Ok(())
-        }
+        let mut handler = ClientHandler {
+            realtime_api,
+            ai_speaking: false,
+            initialized: false,
+            buffer: VecDeque::with_capacity(INPUT_CHUNK_SIZE * 2),
+            in_resampler,
+        };
 
         // Receive and process inputs from the audio callbacks and server event handler.
         while let Some(i) = input_rx.recv().await {
-            if let Err(e) = handle_input(
-                i,
-                &mut realtime_api,
-                &mut initialized,
-                &mut ai_speaking,
-                &mut buffer,
-                &mut in_resampler,
-            )
-            .await
-            {
+            if let Err(e) = handler.handle_input(i).await {
                 // Log the error from the handler, but don't crash the whole task.
                 tracing::error!("Error in client handler: {:?}", e);
             }
