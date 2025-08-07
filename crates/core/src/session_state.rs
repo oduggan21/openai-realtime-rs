@@ -1,4 +1,5 @@
 use crate::{
+    Command,
     reviewer::Reviewer,
     topic::{SubTopic, SubTopicList},
 };
@@ -21,7 +22,6 @@ pub struct QuestionForSubtopic {
 pub enum FeynmanState {
     Listening,
     Analyzing,
-    DeliveringQuestions,
     AnalyzingAnswers,
 }
 
@@ -67,6 +67,7 @@ impl FeynmanSession {
         session: &mut FeynmanSession,
         reviewer: &R,
         segment: String,
+        command_tx: tokio::sync::mpsc::Sender<Command>,
     ) {
         match session.state {
             // In the listening state, we check if we have temp context from a previous leftover segment and add it to the new segment.
@@ -85,7 +86,9 @@ impl FeynmanSession {
                 };
                 // Move to the analyzing state and process the combined segment.
                 session.state = FeynmanState::Analyzing;
-                if let Err(e) = Self::process_analyzing(session, reviewer, combined).await {
+                if let Err(e) =
+                    Self::process_analyzing(session, reviewer, combined, command_tx).await
+                {
                     tracing::error!(
                         "Error during analysis: {:?}. Resetting to Listening state.",
                         e
@@ -97,7 +100,6 @@ impl FeynmanSession {
                 // If we are in an analyzing state and a new segment comes in, just buffer it for later.
                 session.in_between_buffer.push(segment);
             }
-            FeynmanState::DeliveringQuestions => session.in_between_buffer.push(segment),
             FeynmanState::AnalyzingAnswers => {
                 session.answer_buffer.push(segment);
                 session.answer_notify.notify_one()
@@ -113,6 +115,7 @@ impl FeynmanSession {
         session: &'a mut FeynmanSession,
         reviewer: &'a R,
         segment: String,
+        command_tx: tokio::sync::mpsc::Sender<Command>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>
     where
         R: 'a,
@@ -126,7 +129,7 @@ impl FeynmanSession {
                 session.pending_no_subtopic_segment = true;
                 if let Some(next_segment) = session.in_between_buffer.pop() {
                     // Recursive call is safe here because of the Box::pin indirection.
-                    Self::process_analyzing(session, reviewer, next_segment).await?;
+                    Self::process_analyzing(session, reviewer, next_segment, command_tx).await?;
                 } else {
                     session.state = FeynmanState::Listening;
                 }
@@ -211,17 +214,31 @@ impl FeynmanSession {
                 if question_queue.is_empty() {
                     // All subtopics are complete.
                     if let Some(next_segment) = session.in_between_buffer.pop() {
-                        Self::process_analyzing(session, reviewer, next_segment).await?;
+                        Self::process_analyzing(session, reviewer, next_segment, command_tx)
+                            .await?;
                     } else {
                         session.state = FeynmanState::Listening;
                     }
                 } else {
-                    // There are incomplete subtopics/questions: move to the question delivery phase.
-                    session.state = FeynmanState::DeliveringQuestions;
-                    // We have the questions and their subtopics.
+                    // There are incomplete subtopics/questions.
                     session.question_queue = question_queue;
                     session.question_subtopics = incomplete_subtopics;
-                    // Do NOT process more segments here; wait for the questions to be delivered.
+                    session.current_question_idx = 0; // Start with the first question.
+
+                    // Get the first question from the now-populated queue.
+                    if let Some(first_question) = session.question_queue.get(0) {
+                        // Send a command to the runtime to ask the question.
+                        command_tx
+                            .send(Command::SpeakText(first_question.question.clone()))
+                            .await
+                            .context("Failed to send SpeakText command")?;
+
+                        // After commanding the runtime to ask, we wait for the answer.
+                        session.state = FeynmanState::AnalyzingAnswers;
+                    } else {
+                        // This case should not be reached if the queue is not empty, but as a safeguard:
+                        session.state = FeynmanState::Listening;
+                    }
                 }
             }
             Ok(())
@@ -246,7 +263,11 @@ impl FeynmanSession {
         );
     }
 
-    pub async fn analyze_answer<R: Reviewer + Send + Sync>(&mut self, reviewer: &R) -> Result<()> {
+    pub async fn analyze_answer<R: Reviewer + Send + Sync>(
+        &mut self,
+        reviewer: &R,
+        command_tx: tokio::sync::mpsc::Sender<Command>,
+    ) -> Result<()> {
         // Get the current question.
         let current_question = if self.current_question_idx < self.question_queue.len() {
             self.question_queue[self.current_question_idx].clone()
@@ -285,9 +306,36 @@ impl FeynmanSession {
             }
         }
 
-        // Clear the answer buffer and go back to delivering questions.
+        // Clear the buffer for the next answer.
         self.answer_buffer.clear();
-        self.state = FeynmanState::DeliveringQuestions;
+        // Move to the next question.
+        self.current_question_idx += 1;
+
+        if self.current_question_idx < self.question_queue.len() {
+            // If there is a next question, command the runtime to ask it.
+            let next_question = &self.question_queue[self.current_question_idx];
+            command_tx
+                .send(Command::SpeakText(next_question.question.clone()))
+                .await
+                .context("Failed to send next SpeakText command")?;
+            // The state remains AnalyzingAnswers, as we are now waiting for the next answer.
+        } else {
+            // All questions for this batch have been answered.
+            let final_message =
+                "Great, you've answered all the questions for now. Let's continue.".to_string();
+            command_tx
+                .send(Command::SessionComplete(final_message))
+                .await
+                .context("Failed to send SessionComplete command")?;
+
+            // Reset state and queues, ready to listen for the next topic explanation.
+            self.question_queue.clear();
+            self.current_question_idx = 0;
+            self.state = FeynmanState::Listening;
+
+            // TODO: In a future iteration, we should handle the `in_between_buffer` here
+            // to process segments that arrived while questions were being answered.
+        }
 
         Ok(())
     }
@@ -337,9 +385,6 @@ mod tests {
 
         // Set up an expectation: when `analyze_topic` is called, it should return a specific JSON string.
         // This simulates the LLM finding an incomplete subtopic and generating a question.
-        // NOTE: The compiler error indicates that mockall's async_trait integration
-        // isn't working as expected, requiring us to manually return a Pinned Future.
-        // This is not the typical mockall syntax but is necessary to satisfy the compiler.
         mock_reviewer
             .expect_analyze_topic()
             .returning(|_segment, _subtopics| {
@@ -369,17 +414,31 @@ mod tests {
         let mut session = FeynmanSession::new(subtopic_list);
         let segment = "Let's talk about TCP/IP.".to_string();
 
+        // Create a dummy channel for the command. We'll check if a command was sent.
+        let (command_tx, mut command_rx) = tokio::sync::mpsc::channel(1);
+
         // --- 2. Act ---
         // Process the segment. This will trigger the call to the (mock) reviewer.
-        FeynmanSession::process_segment(&mut session, &mock_reviewer, segment).await;
+        FeynmanSession::process_segment(&mut session, &mock_reviewer, segment, command_tx).await;
 
         // --- 3. Assert ---
-        // Check that the session state has transitioned correctly.
+        // Check that the session state has transitioned correctly to wait for an answer.
         assert_eq!(
             session.state,
-            FeynmanState::DeliveringQuestions,
-            "Session should be in DeliveringQuestions state"
+            FeynmanState::AnalyzingAnswers,
+            "Session should be in AnalyzingAnswers state"
         );
+
+        // Check that a command was actually sent.
+        let received_command = command_rx
+            .try_recv()
+            .expect("A command should have been sent");
+        match received_command {
+            Command::SpeakText(text) => {
+                assert_eq!(text, "What is TCP/IP?");
+            }
+            _ => panic!("Expected a SpeakText command"),
+        }
 
         // Check that the question queue has been populated with the expected question.
         assert_eq!(
