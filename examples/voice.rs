@@ -1,19 +1,17 @@
-use std::collections::VecDeque;
-use cpal::{FrameCount, StreamConfig};
 use cpal::traits::{DeviceTrait, StreamTrait};
-use ringbuf::{
-    traits::{Consumer, Producer, Split},
-};
+use cpal::{FrameCount, StreamConfig};
+use feynman_native_utils as utils;
+use feynman_native_utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
+use openai_realtime_types::audio::Base64EncodedAudioBytes;
+use ringbuf::traits::{Consumer, Producer, Split};
 use rubato::Resampler;
+use std::collections::VecDeque;
 use tracing::Level;
 use tracing_subscriber::fmt::time::ChronoLocal;
-use openai_realtime_types::audio::Base64EncodedAudioBytes;
-use openai_realtime_utils as utils;
-use openai_realtime_utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
 
 const INPUT_CHUNK_SIZE: usize = 1024;
 const OUTPUT_CHUNK_SIZE: usize = 1024;
-const OUTPUT_LATENCY_MS: usize =   1000;
+const OUTPUT_LATENCY_MS: usize = 1000;
 
 pub enum Input {
     Audio(Vec<f32>),
@@ -27,7 +25,7 @@ pub enum Input {
 async fn main() {
     //load the environment variables
     dotenvy::dotenv_override().ok();
-    
+
     //create tracing subcsriber to tracking debug statements with timestamps
     tracing_subscriber::fmt()
         .with_max_level(Level::DEBUG)
@@ -44,13 +42,17 @@ async fn main() {
 
     //print out the supported configs for input
     println!("input: {:?}", &input.name().unwrap());
-    input.supported_input_configs().expect("failed to get supported input configs")
+    input
+        .supported_input_configs()
+        .expect("failed to get supported input configs")
         .for_each(|c| println!("supported input config: {:?}", c));
 
     //get the default configs for the audio
-    let input_config = input.default_input_config().expect("failed to get default input config");
-    
-    //create a audio stream config using channels and sample rate default, 
+    let input_config = input
+        .default_input_config()
+        .expect("failed to get default input config");
+
+    //create a audio stream config using channels and sample rate default,
     let input_config = StreamConfig {
         channels: input_config.channels(),
         sample_rate: input_config.sample_rate(),
@@ -60,7 +62,11 @@ async fn main() {
     let input_channel_count = input_config.channels as usize;
 
     //print the input device and configs
-    println!("input: device={:?}, config={:?}", &input.name().unwrap(), &input_config);
+    println!(
+        "input: device={:?}, config={:?}",
+        &input.name().unwrap(),
+        &input_config
+    );
 
     //----------------------------------------------------------------/
     //here we build out our input stream by using an inline function to transform audio into a float
@@ -75,9 +81,9 @@ async fn main() {
     //we then take this buffer and send it through input audio channel
     let input_data_fn = move |data: &[f32], _: &cpal::InputCallbackInfo| {
         let audio = if input_channel_count > 1 {
-            data.chunks(input_channel_count).map(|c| {
-                c.iter().sum::<f32>() / input_channel_count as f32
-            }).collect::<Vec<f32>>()
+            data.chunks(input_channel_count)
+                .map(|c| c.iter().sum::<f32>() / input_channel_count as f32)
+                .collect::<Vec<f32>>()
         } else {
             data.to_vec()
         };
@@ -87,12 +93,14 @@ async fn main() {
     };
 
     //build the input stream
-    let input_stream = input.build_input_stream(
-        &input_config,
-        input_data_fn,
-        move |err| eprintln!("an error occurred on input stream: {}", err),
-        None,
-    ).expect("failed to build input stream");
+    let input_stream = input
+        .build_input_stream(
+            &input_config,
+            input_data_fn,
+            move |err| eprintln!("an error occurred on input stream: {}", err),
+            None,
+        )
+        .expect("failed to build input stream");
 
     input_stream.play().expect("failed to play input stream");
     let _input_channel_count = input_config.channels as usize;
@@ -107,10 +115,12 @@ async fn main() {
     println!("output: {:?}", &output.name().unwrap());
 
     //output the output devices support configs
-    output.supported_output_configs().expect("failed to get supported output configs")
+    output
+        .supported_output_configs()
+        .expect("failed to get supported output configs")
         .for_each(|c| println!("supported output config: {:?}", c));
 
-    //set the output device configs to the default output config 
+    //set the output device configs to the default output config
     let output_config = output
         .default_output_config()
         .expect("failed to get default output config");
@@ -123,21 +133,22 @@ async fn main() {
 
     let output_channel_count = output_config.channels as usize;
     let output_sample_rate = output_config.sample_rate.0 as f32;
-    println!("output: device={:?}, config={:?}", &output.name().unwrap(), &output_config);
+    println!(
+        "output: device={:?}, config={:?}",
+        &output.name().unwrap(),
+        &output_config
+    );
 
-
-    let audio_out_buffer = utils::audio::shared_buffer(output_sample_rate as usize * OUTPUT_LATENCY_MS);
+    let audio_out_buffer =
+        utils::audio::shared_buffer(output_sample_rate as usize * OUTPUT_LATENCY_MS);
     //create a producer and consumer for audio which will be used to receive audio and then play it
     let (mut audio_out_tx, mut audio_out_rx) = audio_out_buffer.split();
-
-
 
     let client_ctrl = input_tx.clone();
     //inline function to get data from the audio buffer and then indicates when the ai is speaking or done speaking
     //cpal library plays the audio data we pull from the audio ring buffer, and we use the input_tx clone
     //to send whether or not ai is speaking.
     let output_data_fn = move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-  
         let mut sample_index = 0;
         let mut silence = 0;
         //while data is not full
@@ -180,27 +191,31 @@ async fn main() {
         }
     };
     //build the output stream
-    let output_stream = output.build_output_stream(
-        &output_config,
-        output_data_fn,
-        move |err| eprintln!("an error occurred on output stream: {}", err),
-        None,
-    ).expect("failed to build output stream");
+    let output_stream = output
+        .build_output_stream(
+            &output_config,
+            output_data_fn,
+            move |err| eprintln!("an error occurred on output stream: {}", err),
+            None,
+        )
+        .expect("failed to build output stream");
 
     //begin playing the output stream
     output_stream.play().expect("failed to play output stream");
 
-
     // OpenAI Realtime API
     //connect with default configs now realtime_api is a client that we can use to send events
-    let mut realtime_api = openai_realtime::connect().await.expect("failed to connect to OpenAI Realtime API");
+    let mut realtime_api = openai_realtime::connect()
+        .await
+        .expect("failed to connect to OpenAI Realtime API");
 
     //set the resampler to configure theoutput sample rate
     let mut out_resampler = utils::audio::create_resampler(
         REALTIME_API_PCM16_SAMPLE_RATE,
         output_sample_rate as f64,
         100,
-    ).expect("failed to create resampler for output");
+    )
+    .expect("failed to create resampler for output");
 
     //base 64 channels that I am going to assume this is used to recieve audio from openai
     let (post_tx, mut post_rx) = tokio::sync::mpsc::channel::<Base64EncodedAudioBytes>(100);
@@ -231,7 +246,10 @@ async fn main() {
 
     let client_ctrl2 = input_tx.clone();
     //create a server events subscriber, subscribing to the server transmitter
-    let mut server_events = realtime_api.server_events().await.expect("failed to get server events");
+    let mut server_events = realtime_api
+        .server_events()
+        .await
+        .expect("failed to get server events");
     let server_handle = tokio::spawn(async move {
         //recieve events
         while let Ok(e) = server_events.recv().await {
@@ -300,18 +318,16 @@ async fn main() {
         input_sample_rate as f64,
         REALTIME_API_PCM16_SAMPLE_RATE,
         INPUT_CHUNK_SIZE,
-    ).expect("failed to create resampler for input");
+    )
+    .expect("failed to create resampler for input");
 
     // client_events for audio
-    //taking the audio from user microphone and sending it 
+    //taking the audio from user microphone and sending it
     let client_handle = tokio::spawn(async move {
-
         let mut ai_speaking = false;
         let mut initialized = false;
         let mut buffer: VecDeque<f32> = VecDeque::with_capacity(INPUT_CHUNK_SIZE * 2);
 
-
-    
         //grab audio that was sent to input channel
         while let Some(i) = input_rx.recv().await {
             match i {
@@ -321,10 +337,18 @@ async fn main() {
                     let session = openai_realtime::types::Session::new()
                         .with_modalities_enable_audio()
                         .with_voice(openai_realtime::types::audio::Voice::Alloy)
-                        .with_input_audio_transcription_enable(openai_realtime::types::audio::TranscriptionModel::Whisper)
+                        .with_input_audio_transcription_enable(
+                            openai_realtime::types::audio::TranscriptionModel::Whisper,
+                        )
                         .build();
-                    println!("session config: {:?}", serde_json::to_string(&session).unwrap());
-                    realtime_api.update_session(session).await.expect("failed to init session");
+                    println!(
+                        "session config: {:?}",
+                        serde_json::to_string(&session).unwrap()
+                    );
+                    realtime_api
+                        .update_session(session)
+                        .await
+                        .expect("failed to init session");
                 }
                 Input::Initialized() => {
                     println!("initialized");
@@ -367,12 +391,13 @@ async fn main() {
                         }
                         let audio_bytes = utils::audio::encode(&resampled);
                         let audio_bytes = Base64EncodedAudioBytes::from(audio_bytes);
-                        realtime_api.append_input_audio_buffer(audio_bytes.clone()).await.expect("failed to send audio");
-
+                        realtime_api
+                            .append_input_audio_buffer(audio_bytes.clone())
+                            .await
+                            .expect("failed to send audio");
                     }
                 }
             }
-
         }
     });
 

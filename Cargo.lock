@@ -487,10 +487,12 @@ dependencies = [
  "anyhow",
  "cpal",
  "dotenvy",
+ "feynman-native-utils",
  "futures",
  "futures-util",
  "hound",
- "openai-realtime-utils",
+ "openai-realtime",
+ "openai-realtime-types",
  "ringbuf",
  "rubato",
  "secrecy",
@@ -520,6 +522,18 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "feynman-native-utils"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "base64",
+ "cpal",
+ "ringbuf",
+ "rubato",
+ "tracing",
 ]
 
 [[package]]
@@ -1327,11 +1341,11 @@ dependencies = [
  "anyhow",
  "cpal",
  "dotenvy",
+ "feynman-native-utils",
  "futures",
  "futures-util",
  "hound",
  "openai-realtime-types",
- "openai-realtime-utils",
  "ringbuf",
  "rubato",
  "secrecy",
@@ -1349,18 +1363,6 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "openai-realtime-utils"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "base64",
- "cpal",
- "ringbuf",
- "rubato",
- "tracing",
 ]
 
 [[package]]
