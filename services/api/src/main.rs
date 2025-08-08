@@ -1,13 +1,19 @@
+mod config;
+
+use crate::config::Config;
 use anyhow::{Context, Result};
 use axum::{
     Router,
-    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::{
+        State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
     response::Response,
     routing::get,
 };
 use feynman_core::{
     agent::{FeynmanAgent, FeynmanService},
-    reviewer::{OpenAIReviewer, Reviewer}, // Correctly import the Reviewer trait
+    reviewer::{OpenAIReviewer, Reviewer},
     topic::{SubTopic, SubTopicList},
 };
 use rmcp::{ServiceExt, model::CallToolRequestParam, object};
@@ -15,6 +21,13 @@ use serde::{Deserialize, Serialize};
 use std::{path::Path, sync::Arc};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info, warn};
+
+// --- Application State ---
+
+/// Holds shared application state, created once at startup.
+pub struct AppState {
+    reviewer: Arc<dyn Reviewer>,
+}
 
 // --- JSON Message Protocol ---
 
@@ -40,22 +53,18 @@ enum ServerMessage {
 
 /// Handles WebSocket upgrade requests.
 /// This function is the entry point for WebSocket connections.
-async fn ws_handler(ws: WebSocketUpgrade) -> Response {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> Response {
     info!("WebSocket upgrade request received");
-    ws.on_upgrade(handle_socket)
+    ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
 /// Manages an individual WebSocket connection and its dedicated agent session.
-async fn handle_socket(socket: WebSocket) {
+async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     info!("New WebSocket connection established. Initializing agent session...");
 
     // Spawn a dedicated task for this client's agent session.
-    // The `tokio::spawn` moves the socket and all agent logic into a new task,
-    // allowing the main server to continue accepting new connections.
     tokio::spawn(async move {
-        // The `run_agent_session` function contains the core logic for a single session.
-        // We wrap it to handle and log any potential errors gracefully without crashing the server.
-        if let Err(e) = run_agent_session(socket).await {
+        if let Err(e) = run_agent_session(socket, state).await {
             error!("Agent session failed: {:?}", e);
         }
         info!("Agent session task finished.");
@@ -63,18 +72,10 @@ async fn handle_socket(socket: WebSocket) {
 }
 
 /// The core logic for a single user session.
-///
-/// This function performs all the setup for a new agent, bridges the WebSocket
-/// to the agent's MCP transport, and runs the communication loop.
-async fn run_agent_session(mut socket: WebSocket) -> Result<()> {
+async fn run_agent_session(mut socket: WebSocket, state: Arc<AppState>) -> Result<()> {
     // --- 1. Agent Initialization ---
-    dotenvy::dotenv().ok();
-    let prompts = feynman_service::prompt_loader::load_prompts(Path::new("prompts"))
-        .context("Failed to load LLM prompts from './prompts' directory")?;
-    let api_key = std::env::var("OPENAI_API_KEY").context("OPENAI_API_KEY must be set")?;
-    let model = std::env::var("CHAT_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
-
-    let reviewer: Arc<dyn Reviewer> = Arc::new(OpenAIReviewer::new(api_key, model, prompts));
+    // Use the shared reviewer instance from the application state.
+    let reviewer = state.reviewer.clone();
 
     // For this web service, we'll hardcode the topic.
     let main_topic = "The Feynman Technique".to_string();
@@ -86,11 +87,9 @@ async fn run_agent_session(mut socket: WebSocket) -> Result<()> {
         main_topic,
         subtopic_list,
     )));
-    let feynman_service = FeynmanService::new(agent_state, reviewer.clone());
+    let feynman_service = FeynmanService::new(agent_state, reviewer);
 
     // --- 2. MCP Transport Setup ---
-    // Create an in-memory, asynchronous pipe for the agent to communicate through.
-    // This creates a pair of connected streams that implement AsyncRead + AsyncWrite.
     let (client_io, server_io) = tokio::io::duplex(4096);
 
     // Spawn the agent's main service loop in a separate task.
@@ -102,9 +101,7 @@ async fn run_agent_session(mut socket: WebSocket) -> Result<()> {
         info!("FeynmanService for client has shut down.");
     });
 
-    // Create the client-side handle to communicate with the agent.
     let mcp_client = ().serve(client_io).await?;
-
     info!("Agent session initialized successfully. Ready for messages.");
 
     // --- 3. Bidirectional Communication Loop ---
@@ -128,7 +125,6 @@ async fn run_agent_session(mut socket: WebSocket) -> Result<()> {
 
                 match client_msg {
                     ClientMessage::UserMessage { text } => {
-                        // Call the agent's `send_message` tool via the MCP client.
                         let call_result = mcp_client
                             .peer()
                             .call_tool(CallToolRequestParam {
@@ -140,7 +136,6 @@ async fn run_agent_session(mut socket: WebSocket) -> Result<()> {
                         let response_text = match call_result {
                             Ok(tool_result) => {
                                 if !tool_result.is_error.unwrap_or(false) {
-                                    // Success path
                                     tool_result
                                         .content
                                         .and_then(|mut c| c.pop())
@@ -152,7 +147,6 @@ async fn run_agent_session(mut socket: WebSocket) -> Result<()> {
                                             "Agent returned unexpected data format.".to_string()
                                         })
                                 } else {
-                                    // Error path
                                     let error_message = tool_result
                                         .content
                                         .and_then(|mut c| c.pop())
@@ -167,7 +161,6 @@ async fn run_agent_session(mut socket: WebSocket) -> Result<()> {
                             }
                         };
 
-                        // Send the agent's response back to the browser.
                         let server_msg = ServerMessage::AgentResponse {
                             text: response_text,
                         };
@@ -184,41 +177,68 @@ async fn run_agent_session(mut socket: WebSocket) -> Result<()> {
                 error!("WebSocket receive error: {}", e);
                 break;
             }
-            _ => { // Ignore other message types like Binary, Ping, Pong
-            }
+            _ => {}
         }
     }
 
     // --- 4. Graceful Shutdown ---
-    // The loop has exited, meaning the client disconnected.
-    // Aborting the agent task ensures its resources are cleaned up.
     agent_handle.abort();
     info!("WebSocket connection closed and agent session terminated.");
     Ok(())
 }
 
+/// Listens for the `Ctrl+C` signal to gracefully shut down the server.
+async fn shutdown_signal() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("Failed to install Ctrl+C handler");
+    info!("Received shutdown signal. Shutting down gracefully...");
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing for logging.
+    // --- 1. Load Configuration ---
+    let config = Config::from_env().context("Failed to load configuration")?;
+
+    // --- 2. Initialize Logging ---
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(config.log_level)
         .with_timer(tracing_subscriber::fmt::time::ChronoLocal::rfc_3339())
         .init();
 
-    // Configure a permissive CORS policy.
+    info!("Configuration loaded. Initializing application state...");
+
+    // --- 3. Initialize Shared State ---
+    let prompts = feynman_service::prompt_loader::load_prompts(Path::new("prompts"))
+        .context("Failed to load LLM prompts from './prompts' directory")?;
+    let reviewer = Arc::new(OpenAIReviewer::new(
+        config.openai_api_key,
+        config.chat_model,
+        prompts,
+    ));
+    let app_state = Arc::new(AppState { reviewer });
+
+    // --- 4. Configure Server ---
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    // Create the Axum application router.
-    let app = Router::new().route("/ws", get(ws_handler)).layer(cors);
+    let app = Router::new()
+        .route("/ws", get(ws_handler))
+        .layer(cors)
+        .with_state(app_state);
 
-    // Bind the server to an address and start it.
-    let addr = "0.0.0.0:3000";
-    info!("Starting WebSocket server, listening on {}", addr);
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    // --- 5. Start Server with Graceful Shutdown ---
+    info!(
+        "Starting WebSocket server, listening on {}",
+        config.bind_address
+    );
+    let listener = tokio::net::TcpListener::bind(config.bind_address).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
+    info!("Server has shut down.");
     Ok(())
 }
