@@ -373,6 +373,15 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to connect to OpenAI Realtime API")?;
 
+    let client_ctrl2 = input_tx.clone();
+    // Create a subscriber for server events.
+    let mut server_events = realtime_api
+        .server_events()
+        .await
+        .context("Failed to get server events channel")?;
+    let reviewer2 = reviewer.clone();
+    let command_tx_for_server = command_tx.clone();
+
     let topic = Topic {
         main_topic: args.topic,
     };
@@ -417,14 +426,6 @@ async fn main() -> Result<()> {
         }
     });
 
-    let client_ctrl2 = input_tx.clone();
-    // Create a subscriber for server events.
-    let mut server_events = realtime_api
-        .server_events()
-        .await
-        .context("Failed to get server events channel")?;
-    let reviewer2 = reviewer.clone();
-    let command_tx_for_server = command_tx.clone();
 
     let server_handle = tokio::spawn(async move {
         let mut session = FeynmanSession::new(subtopic_list);
