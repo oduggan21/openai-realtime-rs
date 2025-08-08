@@ -20,6 +20,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing_subscriber::fmt::time::ChronoLocal;
 
+
 pub enum Input {
     Audio(Vec<f32>),
     Initialize(),
@@ -190,7 +191,10 @@ impl<T: RealtimeApi, R: Resampler<f32> + Send> ClientHandler<T, R> {
 async fn main() -> Result<()> {
     // --- 1. Load Configuration ---
     let config = Config::from_env().context("Failed to load application configuration")?;
+    // --- 1.B 
 
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+     let prompts_path = Path::new(manifest_dir).join("prompts");
     // --- 2. Initialize Logging ---
     tracing_subscriber::fmt()
         .with_max_level(config.log_level)
@@ -203,7 +207,7 @@ async fn main() -> Result<()> {
     let args = Cli::parse();
 
     // --- 4. Load Prompts ---
-    let prompts = prompt_loader::load_prompts(Path::new("prompts"))
+    let prompts = prompt_loader::load_prompts(&prompts_path)
         .context("Failed to load LLM prompts")?;
     tracing::info!("Loaded {} prompts successfully.", prompts.len());
 
