@@ -702,6 +702,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gemini-realtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1408,6 +1421,7 @@ name = "openai-realtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "futures",
  "futures-util",
  "openai-realtime-types",
