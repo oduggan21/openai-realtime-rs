@@ -39,6 +39,7 @@ pub struct FeynmanSession {
     pub question_subtopics: Vec<String>,              // Subtopics currently being questioned
     pub incomplete_subtopics: HashMap<String, SubTopic>,
     pub answer_notify: Arc<Notify>,
+    pub ai_speaking: bool,
 }
 
 impl FeynmanSession {
@@ -57,6 +58,7 @@ impl FeynmanSession {
             question_subtopics: vec![],
             incomplete_subtopics: HashMap::new(),
             answer_notify: Arc::new(Notify::new()),
+            ai_speaking: false,
         }
     }
 
@@ -400,6 +402,9 @@ impl FeynmanSession {
     // Helper to check if the entire session is complete.
     fn is_session_complete(&self) -> bool {
         self.covered_subtopics.len() == self.subtopic_list.subtopics.len()
+    }
+     pub fn on_ai_speaking(&mut self, speaking: bool) {
+        self.ai_speaking = speaking; // add `ai_speaking: bool` field to the struct
     }
 }
 

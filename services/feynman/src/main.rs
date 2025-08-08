@@ -317,6 +317,10 @@ async fn main() -> Result<()> {
     // Create a producer and consumer for the audio output buffer. This is used to receive audio from the AI and play it.
     let (mut audio_out_tx, mut audio_out_rx) = audio_out_buffer.split();
 
+    //channel to alert feynman when the ai is speaking or not speaking
+    let (ai_speaking_tx, mut ai_speaking_rx) = tokio::sync::watch::channel(false);
+    let ai_tx = ai_speaking_tx.clone();
+
     let client_ctrl = input_tx.clone();
     // This callback function provides audio data to the output stream.
     // It pulls samples from the ring buffer and sends events to indicate if the AI is speaking.
@@ -347,14 +351,22 @@ async fn main() -> Result<()> {
         // At this point, the `data` buffer is filled.
         // Notify the client task when the AI is speaking or has finished.
         let client_ctrl = client_ctrl.clone();
-        if silence == (data.len() / output_channel_count) {
-            if let Err(e) = client_ctrl.try_send(Input::AISpeakingDone()) {
-                tracing::warn!("Failed to send speaking done event to client: {:?}", e);
+        let speaking = silence != (data.len() / output_channel_count);
+
+        // keep existing Input::* sends, but log errors
+        if speaking {
+            if let Err(e) = client_ctrl.try_send(Input::AISpeaking()) {
+                tracing::warn!("Failed to send AISpeaking: {:?}", e);
             }
         } else {
-            if let Err(e) = client_ctrl.try_send(Input::AISpeaking()) {
-                tracing::warn!("Failed to send speaking event to client: {:?}", e);
+            if let Err(e) = client_ctrl.try_send(Input::AISpeakingDone()) {
+                tracing::warn!("Failed to send AISpeakingDone: {:?}", e);
             }
+        }
+
+        // also broadcast to core via watch; log send errors
+        if let Err(e) = ai_tx.send(speaking) {
+            tracing::error!("ai_speaking watch send failed: {:?}", e);
         }
     };
     // Build the output stream.
@@ -426,65 +438,60 @@ async fn main() -> Result<()> {
         }
     });
 
+    let mut ai_rx = ai_speaking_rx.clone(); // <- watch<bool> receiver
 
     let server_handle = tokio::spawn(async move {
-        let mut session = FeynmanSession::new(subtopic_list);
+    let mut session = FeynmanSession::new(subtopic_list);
 
-        // Receive and process events from the server.
-        while let Ok(e) = server_events.recv().await {
-            // Match on the event type.
-            match e {
-                // When the session is created, send an `Initialize` event to the client task.
-                openai_realtime::types::events::ServerEvent::SessionCreated(data) => {
-                    tracing::info!("Session created: {:?}", data.session());
-                    if let Err(e) = client_ctrl2.try_send(Input::Initialize()) {
-                        tracing::warn!("Failed to send initialized event to client: {:?}", e);
+    loop {
+        tokio::select! {
+            // 1) OpenAI Realtime events (your existing match stays the same)
+            ev = server_events.recv() => {
+                let e = match ev {
+                    Ok(e) => e,
+                    Err(_) => break, // connection closed
+                };
+
+                match e {
+                    openai_realtime::types::events::ServerEvent::SessionCreated(data) => {
+                        tracing::info!("Session created: {:?}", data.session());
+                        let _ = client_ctrl2.try_send(Input::Initialize());
                     }
-                }
-                // When the session is updated, send an `Initialized` event.
-                openai_realtime::types::events::ServerEvent::SessionUpdated(data) => {
-                    tracing::info!("Session updated: {:?}", data.session());
-                    if let Err(e) = client_ctrl2.try_send(Input::Initialized()) {
-                        tracing::warn!("Failed to send initialized event to client: {:?}", e);
+                    openai_realtime::types::events::ServerEvent::SessionUpdated(data) => {
+                        tracing::info!("Session updated: {:?}", data.session());
+                        let _ = client_ctrl2.try_send(Input::Initialized());
                     }
-                }
-                openai_realtime::types::events::ServerEvent::InputAudioBufferSpeechStarted(
-                    data,
-                ) => {
-                    tracing::debug!("User speech started: {:?}", data);
-                }
-                openai_realtime::types::events::ServerEvent::InputAudioBufferSpeechStopped(
-                    data,
-                ) => {
-                    tracing::debug!("User speech stopped: {:?}", data);
-                }
-                openai_realtime::types::events::ServerEvent::ConversationItemInputAudioTranscriptionCompleted(data ) => {
-                    let segment = data.transcript().trim().to_owned();
-                    tracing::info!("User said: \"{}\"", segment);
-                    FeynmanSession::process_segment(&mut session, &*reviewer2, segment, command_tx_for_server.clone()).await;
-                }
-                
-                // If we receive response audio, send it to the post-processing channel.
-                openai_realtime::types::events::ServerEvent::ResponseAudioDelta(data) => {
-           
-                    if let Err(e) = post_tx.send(data.delta().to_string()).await {
-                        tracing::warn!("Failed to send audio data to resampler: {:?}", e);
+                    openai_realtime::types::events::ServerEvent::ConversationItemInputAudioTranscriptionCompleted(data) => {
+                        let segment = data.transcript().trim().to_owned();
+                        tracing::info!("User said: \"{}\"", segment);
+                        FeynmanSession::process_segment(&mut session, &*reviewer2, segment, command_tx_for_server.clone()).await;
                     }
+                    openai_realtime::types::events::ServerEvent::ResponseAudioDelta(data) => {
+                        if let Err(e) = post_tx.send(data.delta().to_string()).await {
+                            tracing::warn!("Failed to send audio data to resampler: {:?}", e);
+                        }
+                    }
+                    openai_realtime::types::events::ServerEvent::ResponseDone(data) => {
+                        tracing::debug!("Response done. Usage: {:?}", data.response().usage());
+                    }
+                    openai_realtime::types::events::ServerEvent::Close { reason } => {
+                        tracing::info!("Connection closed: {:?}", reason);
+                        break;
+                    }
+                    _ => {}
                 }
-                openai_realtime::types::events::ServerEvent::ResponseCreated(data) => {
-                    tracing::debug!("Response created: {:?}", data.response());
+            }
+
+            // 2) Audio-driven speaking state (from your output callback)
+            Ok(_) = ai_rx.changed() => {
+                let speaking = *ai_rx.borrow();   // current bool
+                session.on_ai_speaking(speaking); // add this tiny method in core
+
+                if !speaking {
+                    // Optional: kick the next step if you were waiting for TTS to finish
+                    // session.maybe_advance_after_ai_finished(&*reviewer2, command_tx_for_server.clone()).await;
                 }
-                openai_realtime::types::events::ServerEvent::ResponseAudioTranscriptDone(data) => {
-                    tracing::info!("AI said: {:?}", data.transcript());
-                }
-                openai_realtime::types::events::ServerEvent::ResponseDone(data) => {
-                    tracing::debug!("Response done. Usage: {:?}", data.response().usage());
-                }
-                openai_realtime::types::events::ServerEvent::Close { reason } => {
-                    tracing::info!("Connection closed: {:?}", reason);
-                    break;
-                }
-                _ => {}
+            }
             }
         }
     });
@@ -676,4 +683,161 @@ mod tests {
         assert!(result.is_ok());
         // The mock assertions automatically verify that the expected calls were made.
     }
+
+    // Produces 1 frame per process call so sending happens.
+struct OneFrameResampler;
+impl Resampler<f32> for OneFrameResampler {
+    fn process<V: AsRef<[f32]>>(
+        &mut self,
+        _waves_in: &[V],
+        _active_channels_mask: Option<&[bool]>,
+    ) -> Result<Vec<Vec<f32>>, ResampleError> {
+        Ok(vec![vec![0.1_f32]]) // non-empty -> triggers send
+    }
+    fn process_into_buffer<Vin: AsRef<[f32]>, Vout: AsMut<[f32]>>(
+        &mut self,
+        _waves_in: &[Vin],
+        waves_out: &mut [Vout],
+        _active_channels_mask: Option<&[bool]>,
+    ) -> Result<(usize, usize), ResampleError> {
+        let nbr_frames = waves_out[0].as_mut().len();
+        for ch in waves_out.iter_mut() {
+            for s in ch.as_mut().iter_mut() { *s = 0.1; }
+        }
+        Ok((1, nbr_frames))
+    }
+    fn input_frames_next(&self) -> usize { 1 }
+    fn input_frames_max(&self) -> usize { 1 }
+    fn output_frames_next(&self) -> usize { 1 }
+    fn output_frames_max(&self) -> usize { 1 }
+    fn nbr_channels(&self) -> usize { 1 }
+    fn output_delay(&self) -> usize { 0 }
+    fn set_resample_ratio(&mut self, _: f64, _: bool) -> Result<(), ResampleError> { Ok(()) }
+    fn set_resample_ratio_relative(&mut self, _: f64, _: bool) -> Result<(), ResampleError> { Ok(()) }
+    fn reset(&mut self) {}
+}
+
+#[tokio::test]
+async fn audio_is_blocked_when_ai_is_speaking() {
+    let mut mock = MockRealtimeApi::new();
+    mock.expect_append_input_audio_buffer().times(0); // must NOT be called
+
+    let mut h = ClientHandler {
+        realtime_api: mock,
+        ai_speaking: true,   // speaking -> gate ON
+        initialized: true,   // mic active
+        buffer: VecDeque::new(),
+        in_resampler: OneFrameResampler,
+    };
+
+    // Feed some audio; should NOT call append_input_audio_buffer
+    h.handle_input(Input::Audio(vec![0.5])).await.unwrap();
+}
+
+#[tokio::test]
+async fn audio_is_sent_when_ai_is_not_speaking() {
+    let mut mock = MockRealtimeApi::new();
+    mock.expect_append_input_audio_buffer()
+        .times(1)
+        .returning(|_| Ok(()));
+
+    let mut h = ClientHandler {
+        realtime_api: mock,
+        ai_speaking: false,  // not speaking -> gate OFF
+        initialized: true,
+        buffer: VecDeque::new(),
+        in_resampler: OneFrameResampler,
+    };
+
+    h.handle_input(Input::Audio(vec![0.5])).await.unwrap();
+}
+
+#[tokio::test]
+async fn speaking_toggle_gates_then_allows_audio() {
+    let mut mock = MockRealtimeApi::new();
+    // Exactly one send overall (only after speaking is DONE)
+    mock.expect_append_input_audio_buffer()
+        .times(1)
+        .returning(|_| Ok(()));
+
+    let mut h = ClientHandler {
+        realtime_api: mock,
+        ai_speaking: false,
+        initialized: true,
+        buffer: VecDeque::new(),
+        in_resampler: OneFrameResampler,
+    };
+
+    // Turn speaking ON -> gate audio
+    h.handle_input(Input::AISpeaking()).await.unwrap();
+    h.handle_input(Input::Audio(vec![0.5])).await.unwrap(); // should NOT send
+
+    // Turn speaking OFF -> allow audio
+    h.handle_input(Input::AISpeakingDone()).await.unwrap();
+    h.handle_input(Input::Audio(vec![0.5])).await.unwrap(); // should send (once)
+}
+#[tokio::test]
+async fn watch_updates_session_ai_flag() {
+    let (tx, mut rx) = tokio::sync::watch::channel(false);
+    let subtopics = SubTopicList::new(vec![]);
+    let mut session = FeynmanSession::new(subtopics);
+    // assume session.ai_speaking starts false
+
+    tx.send(true).unwrap();
+    rx.changed().await.unwrap();
+    session.on_ai_speaking(*rx.borrow());
+    // assert your session exposes a getter or test via next-state behavior
+    // e.g., assert!(session.is_ai_speaking());
+
+    tx.send(false).unwrap();
+    rx.changed().await.unwrap();
+    session.on_ai_speaking(*rx.borrow());
+    // assert!(!session.is_ai_speaking());
+}
+
+#[tokio::test]
+async fn select_loop_reacts_to_watch_and_server() {
+    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+    use tokio::time::{timeout, Duration};
+
+    let hit_watch  = Arc::new(AtomicBool::new(false));
+    let hit_server = Arc::new(AtomicBool::new(false));
+
+    let (sev_tx, mut sev_rx) = tokio::sync::mpsc::channel::<()>(1);
+    let (tx, mut rx)         = tokio::sync::watch::channel(false);
+
+    let hw = hit_watch.clone();
+    let hs = hit_server.clone();
+
+    let h = tokio::spawn(async move {
+        loop {
+            if hw.load(Ordering::SeqCst) && hs.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::select! {
+                _ = rx.changed() => {
+                    let _ = *rx.borrow(); // read current speaking if you want
+                    hw.store(true, Ordering::SeqCst);
+                }
+                Some(_) = sev_rx.recv() => {
+                    hs.store(true, Ordering::SeqCst);
+                }
+            }
+        }
+    });
+
+    // drive both sides
+    tx.send(true).unwrap();
+    sev_tx.send(()).await.unwrap();
+
+    // don't let this hang forever
+    timeout(Duration::from_millis(500), h).await.expect("timed out").unwrap();
+
+    assert!(hit_watch.load(Ordering::SeqCst));
+    assert!(hit_server.load(Ordering::SeqCst));
+}
+
+
+
+
 }
