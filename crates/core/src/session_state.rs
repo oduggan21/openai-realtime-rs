@@ -63,9 +63,9 @@ impl FeynmanSession {
     // This function is now generic over any type `R` that implements the `Reviewer` trait.
     // The `Send + Sync` bounds are required because the `reviewer` is used in an `async`
     // context (`process_analyzing`) which may be run on a different thread.
-    pub async fn process_segment<R: Reviewer + Send + Sync>(
+    pub async fn process_segment(
         session: &mut FeynmanSession,
-        reviewer: &R,
+        reviewer: &(dyn Reviewer + Send + Sync),
         segment: String,
         command_tx: tokio::sync::mpsc::Sender<Command>,
     ) {
@@ -123,15 +123,12 @@ impl FeynmanSession {
     // It's generic over `R: Reviewer` and also requires `Send + Sync` because the
     // returned Future might be sent across threads (e.g., in a `tokio::spawn`).
     // The `'a` lifetime ensures that the reference to the reviewer lives as long as the Future.
-    fn process_analyzing<'a, R: Reviewer + Send + Sync>(
+    fn process_analyzing<'a>(
         session: &'a mut FeynmanSession,
-        reviewer: &'a R,
+        reviewer: &'a (dyn Reviewer + Send + Sync),
         segment: String,
         command_tx: tokio::sync::mpsc::Sender<Command>,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>
-    where
-        R: 'a,
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let detected_subtopics = session.subtopic_list.find_mentions(&segment, 70);
 
@@ -275,9 +272,9 @@ impl FeynmanSession {
         );
     }
 
-    pub async fn analyze_answer<R: Reviewer + Send + Sync>(
+    pub async fn analyze_answer(
         &mut self,
-        reviewer: &R,
+        reviewer: &(dyn Reviewer + Send + Sync),
         command_tx: tokio::sync::mpsc::Sender<Command>,
     ) -> Result<()> {
         // Get the current question.
