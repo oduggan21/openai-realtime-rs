@@ -4,13 +4,12 @@ use anyhow::Result;
 use rmcp::tool_handler;
 use rmcp::{
     ServerHandler,
-    handler::server::{router::tool::ToolRouter, tool::Parameters, wrapper::Json},
+    handler::server::{router::tool::ToolRouter, tool::Parameters},
     model::{ServerCapabilities, ServerInfo},
     tool, tool_router,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -131,10 +130,7 @@ impl FeynmanService {
 
     /// Processes a user's message, acting as the main entry point for the agent's logic loop.
     #[tool(description = "Send a message to the Feynman agent to continue the lesson.")]
-    pub async fn send_message(
-        &self,
-        args: Parameters<SendMessageArgs>,
-    ) -> Result<Json<Value>, String> {
+    pub async fn send_message(&self, args: Parameters<SendMessageArgs>) -> Result<String, String> {
         // This tool now contains the "agent loop" logic.
         // It constructs a prompt and simulates an LLM call.
         // In a real scenario, this would involve a call to an LLM client,
@@ -195,9 +191,8 @@ Instructions:
 
         let placeholder_response = "That's interesting! I'm analyzing your explanation now. Could you tell me more about one of the subtopics?".to_string();
 
-        Ok(Json(
-            serde_json::to_value(placeholder_response).map_err(|e| e.to_string())?,
-        ))
+        // Simply return the string. rmcp will handle wrapping it in the correct Content type.
+        Ok(placeholder_response)
     }
 
     /// Analyzes a user's explanation of one or more subtopics to check for completeness.
@@ -205,15 +200,16 @@ Instructions:
     pub async fn analyze_topic(
         &self,
         args: Parameters<AnalyzeTopicArgs>,
-    ) -> Result<Json<Value>, String> {
+    ) -> Result<rmcp::Json<serde_json::Value>, String> {
         let subtopics: Vec<SubTopic> = args.0.subtopics.into_iter().map(SubTopic::new).collect();
         let result_str = self
             .reviewer
             .analyze_topic(&args.0.segment, &subtopics)
             .await
             .map_err(|e| e.to_string())?;
-        let json_val: Value = serde_json::from_str(&result_str).map_err(|e| e.to_string())?;
-        Ok(Json(json_val))
+        let json_val: serde_json::Value =
+            serde_json::from_str(&result_str).map_err(|e| e.to_string())?;
+        Ok(rmcp::Json(json_val))
     }
 
     /// Generates a list of key subtopics for a given main topic.
@@ -221,14 +217,14 @@ Instructions:
     pub async fn generate_subtopics(
         &self,
         args: Parameters<GenerateSubtopicsArgs>,
-    ) -> Result<Json<Value>, String> {
+    ) -> Result<rmcp::Json<serde_json::Value>, String> {
         let result = self
             .reviewer
             .generate_subtopics(&args.0.topic)
             .await
             .map_err(|e| e.to_string())?;
         let json_val = serde_json::to_value(result).map_err(|e| e.to_string())?;
-        Ok(Json(json_val))
+        Ok(rmcp::Json(json_val))
     }
 
     /// Analyzes a user's answer to a specific question for correctness.
@@ -236,14 +232,14 @@ Instructions:
     pub async fn analyze_answer(
         &self,
         args: Parameters<AnalyzeAnswerArgs>,
-    ) -> Result<Json<Value>, String> {
+    ) -> Result<rmcp::Json<serde_json::Value>, String> {
         let result = self
             .reviewer
             .analyze_answer(&args.0.question, &args.0.answer)
             .await
             .map_err(|e| e.to_string())?;
         let json_val = serde_json::to_value(result).map_err(|e| e.to_string())?;
-        Ok(Json(json_val))
+        Ok(rmcp::Json(json_val))
     }
 
     /// Checks if a new segment of user speech indicates a change in topic.
@@ -251,14 +247,15 @@ Instructions:
     pub async fn looks_like_topic_change(
         &self,
         args: Parameters<LooksLikeTopicChangeArgs>,
-    ) -> Result<Json<Value>, String> {
+    ) -> Result<rmcp::Json<serde_json::Value>, String> {
         let result_str = self
             .reviewer
             .looks_like_topic_change(&args.0.context_buffer, &args.0.new_segment)
             .await
             .map_err(|e| e.to_string())?;
-        let json_val: Value = serde_json::from_str(&result_str).map_err(|e| e.to_string())?;
-        Ok(Json(json_val))
+        let json_val: serde_json::Value =
+            serde_json::from_str(&result_str).map_err(|e| e.to_string())?;
+        Ok(rmcp::Json(json_val))
     }
 
     /// Checks if a user's explanation adequately answers a specific question.
@@ -266,14 +263,14 @@ Instructions:
     pub async fn check_answer_satisfies_question(
         &self,
         args: Parameters<CheckAnswerSatisfiesQuestionArgs>,
-    ) -> Result<Json<Value>, String> {
+    ) -> Result<rmcp::Json<serde_json::Value>, String> {
         let result = self
             .reviewer
             .check_answer_satisfies_question(&args.0.segment, &args.0.question)
             .await
             .map_err(|e| e.to_string())?;
         let json_val = serde_json::to_value(result).map_err(|e| e.to_string())?;
-        Ok(Json(json_val))
+        Ok(rmcp::Json(json_val))
     }
 
     /// Provides a summary or feedback on the last piece of user explanation.
@@ -281,7 +278,7 @@ Instructions:
     pub async fn analyze_last_explained_context(
         &self,
         args: Parameters<AnalyzeLastExplainedContextArgs>,
-    ) -> Result<Json<Value>, String> {
+    ) -> Result<rmcp::Json<serde_json::Value>, String> {
         let result = self
             .reviewer
             .analyze_last_explained_context(
@@ -292,6 +289,6 @@ Instructions:
             .await
             .map_err(|e| e.to_string())?;
         let json_val = serde_json::to_value(result).map_err(|e| e.to_string())?;
-        Ok(Json(json_val))
+        Ok(rmcp::Json(json_val))
     }
 }
