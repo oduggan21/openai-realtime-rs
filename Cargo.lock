@@ -549,11 +549,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64",
  "clap",
  "cpal",
  "dotenvy",
  "feynman-core",
  "feynman-native-utils",
+ "gemini-realtime",
  "mockall",
  "openai-realtime",
  "ringbuf",
