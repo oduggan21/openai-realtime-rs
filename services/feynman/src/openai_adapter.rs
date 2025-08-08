@@ -4,6 +4,7 @@ use feynman_core::generic_types::{GenericServerEvent, GenericSessionConfig};
 use feynman_core::realtime_api::RealtimeApi;
 use feynman_native_utils::audio;
 use openai_realtime::OAIClient;
+use openai_realtime::config;
 use openai_realtime::types::audio::{
     ServerVadTurnDetection, TranscriptionModel, TurnDetection, Voice,
 };
@@ -16,10 +17,11 @@ pub struct OpenAIAdapter<C: OAIClient> {
 }
 
 impl OpenAIAdapter<openai_realtime::Client> {
-    pub async fn new() -> Result<Self> {
-        let client = openai_realtime::connect()
+    pub async fn new(api_key: String) -> Result<Self> {
+        let oai_config = config::Config::builder().with_api_key(&api_key).build();
+        let client = openai_realtime::connect_with_config(1024, oai_config)
             .await
-            .context("Failed to connect to OpenAI Realtime API")?;
+            .context("Failed to connect to OpenAI Realtime API with provided key")?;
         Ok(Self {
             client,
             event_rx: None,
