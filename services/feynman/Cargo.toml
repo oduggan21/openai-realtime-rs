@@ -20,9 +20,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }
 anyhow = { workspace = true }
 clap  = { workspace = true }
-thiserror = "2.0.12"
+thiserror = { workspace = true }
 async-trait = { workspace = true }
 base64 = "0.22.1"
+rmcp = { workspace = true, features = ["transport-io"] }
 
 [dev-dependencies]
 tempfile = "3.20.0"
