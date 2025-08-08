@@ -22,7 +22,10 @@ Cargo.lock
 
 **/.env
 
+node_modules
+.react-router
 
 # dev
 grinchset.txt
 docker-compose.yaml
+services/api/prompts
