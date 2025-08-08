@@ -1,89 +1,143 @@
-use crate::types::{ConfigRequest, ServerEvent, SessionConfig, TtsPayload, TtsRequest};
+use crate::types::{
+    BidiGenerateContentClientContent, BidiGenerateContentRealtimeInput, BidiGenerateContentSetup,
+    Blob, ClientMessage, Content, GenerationConfig, Part, ResponseModality, ServerMessage,
+};
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::TcpStream;
-use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message,
-};
+use tokio::sync::{broadcast, mpsc};
+use tokio_tungstenite::tungstenite::protocol::Message;
 
-type WsWriter =
-    futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
-type WsReader = futures_util::stream::SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
-
-/// A client for the simplified Gemini Real-time WebSocket API.
+/// A client for the Gemini Real-time WebSocket API.
+/// It manages its own internal read/write tasks.
 pub struct GeminiClient {
-    write: WsWriter,
-    read: WsReader,
+    client_tx: mpsc::Sender<Message>,
+    server_tx: broadcast::Sender<ServerMessage>,
 }
 
 /// Establishes a connection to the Gemini real-time service.
 pub async fn connect(api_key: &str) -> Result<GeminiClient> {
-    let url = format!("wss://gemini.api.google.com/v1/stream?key={}", api_key);
-    let (ws_stream, _) = connect_async(url)
+    let url = format!(
+        "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={}",
+        api_key
+    );
+    let (ws_stream, _) = tokio_tungstenite::connect_async(url)
         .await
         .context("Failed to connect to Gemini WebSocket")?;
 
     tracing::info!("Successfully connected to Gemini WebSocket.");
-    let (write, read) = ws_stream.split();
-    Ok(GeminiClient { write, read })
-}
+    let (mut write, mut read) = ws_stream.split();
 
-impl GeminiClient {
-    /// Sends the initial session configuration.
-    pub async fn send_config(&mut self, instructions: String) -> Result<()> {
-        let req = ConfigRequest {
-            config: SessionConfig { instructions },
-        };
-        let json = serde_json::to_string(&req)?;
-        self.write
-            .send(Message::Text(json))
-            .await
-            .context("Failed to send config message")
-    }
+    let (client_tx, mut client_rx) = mpsc::channel::<Message>(32);
+    let (server_tx, _) = broadcast::channel::<ServerMessage>(32);
+    let server_tx_clone = server_tx.clone();
 
-    /// Sends a text-to-speech request.
-    pub async fn send_tts(&mut self, text: String) -> Result<()> {
-        let req = TtsRequest {
-            tts: TtsPayload { text },
-        };
-        let json = serde_json::to_string(&req)?;
-        self.write
-            .send(Message::Text(json))
-            .await
-            .context("Failed to send TTS message")
-    }
+    // Write task: reads from MPSC and sends to WebSocket
+    tokio::spawn(async move {
+        while let Some(msg) = client_rx.recv().await {
+            if write.send(msg).await.is_err() {
+                tracing::error!("Failed to send message to Gemini WebSocket; connection closed.");
+                break;
+            }
+        }
+    });
 
-    /// Sends a raw chunk of PCM audio data.
-    pub async fn send_audio_chunk(&mut self, pcm_data: Vec<u8>) -> Result<()> {
-        self.write
-            .send(Message::Binary(pcm_data))
-            .await
-            .context("Failed to send audio chunk")
-    }
-
-    /// Reads the next event from the server.
-    pub async fn next_event(&mut self) -> Result<Option<ServerEvent>> {
-        while let Some(msg) = self.read.next().await {
+    // Read task: reads from WebSocket and broadcasts events
+    tokio::spawn(async move {
+        while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
-                    let event: ServerEvent = serde_json::from_str(&text)
-                        .context("Failed to deserialize server event")?;
-                    return Ok(Some(event));
+                    match serde_json::from_str::<ServerMessage>(&text) {
+                        Ok(event) => {
+                            if server_tx_clone.send(event).is_err() {
+                                // This is not an error, just means the main app is no longer listening.
+                                tracing::info!(
+                                    "No active receivers for Gemini server events; stopping read task."
+                                );
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to deserialize Gemini server event: {}. Raw text: {}",
+                                e,
+                                text
+                            );
+                        }
+                    }
                 }
                 Ok(Message::Binary(_)) => {
                     tracing::warn!("Received unexpected binary message from Gemini server.");
                 }
                 Ok(Message::Close(_)) => {
-                    tracing::info!("Gemini WebSocket connection closed.");
-                    return Ok(None);
+                    tracing::info!("Gemini WebSocket connection closed by server.");
+                    break;
                 }
                 Err(e) => {
                     tracing::error!("Error reading from Gemini WebSocket: {}", e);
-                    return Err(e.into());
+                    break;
                 }
                 _ => { /* Ignore Ping/Pong */ }
             }
         }
-        Ok(None)
+    });
+
+    Ok(GeminiClient {
+        client_tx,
+        server_tx,
+    })
+}
+
+impl GeminiClient {
+    /// Sends a message to the client's outgoing channel.
+    async fn send_message(&self, message: ClientMessage) -> Result<()> {
+        let json = serde_json::to_string(&message)?;
+        self.client_tx
+            .send(Message::Text(json))
+            .await
+            .context("Failed to send message to client channel")
+    }
+
+    /// Sends the initial session configuration.
+    pub async fn send_config(&mut self, instructions: String) -> Result<()> {
+        let setup = BidiGenerateContentSetup {
+            model: "models/gemini-2.0-flash-exp".to_string(), // Model required by the API
+            system_instruction: Some(Content {
+                role: "user".to_string(),
+                parts: vec![Part { text: instructions }],
+            }),
+            generation_config: Some(GenerationConfig {
+                response_modalities: vec![ResponseModality::Audio, ResponseModality::Text],
+            }),
+        };
+        self.send_message(ClientMessage::Setup(setup)).await
+    }
+
+    /// Sends a text-to-speech request.
+    pub async fn send_tts(&mut self, text: String) -> Result<()> {
+        let content = BidiGenerateContentClientContent {
+            turns: vec![Content {
+                role: "model".to_string(), // Using "model" role to make the AI speak our text
+                parts: vec![Part { text }],
+            }],
+            turn_complete: true,
+        };
+        self.send_message(ClientMessage::ClientContent(content))
+            .await
+    }
+
+    /// Sends a raw chunk of PCM audio data, base64 encoded.
+    pub async fn send_audio_chunk(&mut self, base64_data: String) -> Result<()> {
+        let input = BidiGenerateContentRealtimeInput {
+            audio: Blob {
+                mime_type: "audio/pcm;rate=16000".to_string(),
+                data: base64_data,
+            },
+        };
+        self.send_message(ClientMessage::RealtimeInput(input)).await
+    }
+
+    /// Subscribes to the stream of events from the server.
+    pub fn server_events(&self) -> broadcast::Receiver<ServerMessage> {
+        self.server_tx.subscribe()
     }
 }
