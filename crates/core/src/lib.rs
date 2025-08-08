@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod gemini_reviewer;
 pub mod generic_types;
 pub mod realtime_api;

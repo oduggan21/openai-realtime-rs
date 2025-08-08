@@ -13,6 +13,8 @@ dotenvy = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
+rmcp = { workspace = true }
+schemars = "1.0.4"
 
 [dev-dependencies]
 mockall = "0.13.1"
