@@ -20,7 +20,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }
 anyhow = { workspace = true }
 clap  = { workspace = true }
 thiserror = "2.0.12"
-async-trait = "0.1.88"
+async-trait = { workspace = true }
 
 
 [dev-dependencies]

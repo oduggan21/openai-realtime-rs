@@ -3,17 +3,19 @@ use async_trait::async_trait;
 use feynman_core::generic_types::{GenericServerEvent, GenericSessionConfig};
 use feynman_core::realtime_api::RealtimeApi;
 use feynman_native_utils::audio;
+use openai_realtime::OAIClient;
 use openai_realtime::types::audio::{
     ServerVadTurnDetection, TranscriptionModel, TurnDetection, Voice,
 };
 
 /// An adapter that implements the generic `RealtimeApi` trait for the `openai_realtime::Client`.
-pub struct OpenAIAdapter {
-    client: openai_realtime::Client,
+/// It is generic over a trait `OAIClient` to allow for mocking the underlying client in tests.
+pub struct OpenAIAdapter<C: OAIClient> {
+    client: C,
     event_rx: Option<tokio::sync::mpsc::Receiver<GenericServerEvent>>,
 }
 
-impl OpenAIAdapter {
+impl OpenAIAdapter<openai_realtime::Client> {
     pub async fn new() -> Result<Self> {
         let client = openai_realtime::connect()
             .await
@@ -26,7 +28,7 @@ impl OpenAIAdapter {
 }
 
 #[async_trait]
-impl RealtimeApi for OpenAIAdapter {
+impl<C: OAIClient> RealtimeApi for OpenAIAdapter<C> {
     async fn update_session(&mut self, config: GenericSessionConfig) -> Result<()> {
         let turn_detection = TurnDetection::ServerVad(
             ServerVadTurnDetection::default()
@@ -114,5 +116,72 @@ impl RealtimeApi for OpenAIAdapter {
         let (_new_tx, new_rx) = tokio::sync::mpsc::channel(128);
         let old_rx = self.event_rx.replace(new_rx);
         Ok(old_rx.unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockall::{mock, predicate::*};
+    use openai_realtime::OAIClient;
+    use openai_realtime::types::{Item, MessageRole};
+
+    mock! {
+        pub OAIClient {}
+        #[async_trait]
+        impl OAIClient for OAIClient {
+            async fn update_session(&mut self, config: openai_realtime::types::Session) -> Result<()>;
+            async fn append_input_audio_buffer(&mut self, audio: String) -> Result<()>;
+            async fn create_conversation_item(&mut self, item: Item) -> Result<()>;
+            async fn create_response(&mut self) -> Result<()>;
+            async fn server_events(&mut self) -> Result<openai_realtime::ServerRx>;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_spoken_response() {
+        // --- Arrange ---
+        let mut mock_client = MockOAIClient::new();
+        let question_text = "What is the meaning of life?".to_string();
+
+        // Set up expectations on the mock client.
+        // We expect `create_conversation_item` to be called once.
+        mock_client
+            .expect_create_conversation_item()
+            .withf(move |item| {
+                // Use `withf` to inspect the argument
+                if let Item::Message(msg) = item {
+                    if msg.role() == MessageRole::System {
+                        if let Some(openai_realtime::types::Content::InputText(content)) =
+                            msg.content().get(0)
+                        {
+                            return content.text() == question_text;
+                        }
+                    }
+                }
+                false
+            })
+            .times(1)
+            .returning(|_| Ok(()));
+
+        // We expect `create_response` to be called once, after the item is created.
+        mock_client
+            .expect_create_response()
+            .times(1)
+            .returning(|| Ok(()));
+
+        let mut adapter = OpenAIAdapter {
+            client: mock_client,
+            event_rx: None,
+        };
+
+        // --- Act ---
+        let result = adapter
+            .create_spoken_response("What is the meaning of life?".to_string())
+            .await;
+
+        // --- Assert ---
+        assert!(result.is_ok());
+        // The mock's expectations are automatically verified when `adapter` is dropped.
     }
 }
