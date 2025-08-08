@@ -113,8 +113,18 @@ async fn run_agent_session(mut socket: WebSocket, state: Arc<AppState>) -> Resul
     let (client_io, server_io) = tokio::io::duplex(4096);
     let agent_handle = tokio::spawn(async move {
         info!("Starting FeynmanService for new client.");
-        if let Err(e) = feynman_service.serve(server_io).await {
-            error!("Agent service loop exited with error: {:?}", e);
+        // The `serve` method returns a `RunningService`. We must hold onto it
+        // and call `.waiting()` to keep the service alive.
+        match feynman_service.serve(server_io).await {
+            Ok(running_service) => {
+                info!("FeynmanService is running. Waiting for completion...");
+                if let Err(e) = running_service.waiting().await {
+                    error!("Agent service waiting loop exited with error: {:?}", e);
+                }
+            }
+            Err(e) => {
+                error!("Agent service failed to start: {:?}", e);
+            }
         }
         info!("FeynmanService for client has shut down.");
     });
