@@ -4,7 +4,7 @@ version = "0.0.3"
 edition = "2024"
 
 [workspace]
-members = [ "crates/openai-realtime", "crates/openai-realtime-types", "crates/native-utils", "services/feynman", "crates/core", "crates/gemini-realtime"]
+members = [ "crates/openai-realtime", "crates/openai-realtime-types", "crates/native-utils", "services/feynman", "crates/core", "crates/gemini-realtime", "services/api"]
 
 [dev-dependencies]
 openai-realtime-types = { path = "./crates/openai-realtime-types" }
