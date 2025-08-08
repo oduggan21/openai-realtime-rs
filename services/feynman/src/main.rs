@@ -1,19 +1,24 @@
 mod config;
+mod gemini_adapter;
 mod openai_adapter;
 mod prompt_loader;
 
-use crate::config::{Config, INPUT_CHUNK_SIZE, OUTPUT_CHUNK_SIZE, OUTPUT_LATENCY_MS};
+use crate::config::{
+    Config, INPUT_CHUNK_SIZE, OUTPUT_CHUNK_SIZE, OUTPUT_LATENCY_MS, RealtimeProvider,
+};
 use crate::openai_adapter::OpenAIAdapter;
 use anyhow::{Context, Result};
 use clap::Parser;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{FrameCount, StreamConfig};
+use feynman_core::gemini_reviewer::GeminiReviewer;
 use feynman_core::generic_types::{GenericServerEvent, GenericSessionConfig};
 use feynman_core::realtime_api::RealtimeApi;
-use feynman_core::reviewer::{Reviewer, ReviewerClient};
+use feynman_core::reviewer::{OpenAIReviewer, Reviewer};
 use feynman_core::session_state::FeynmanSession;
 use feynman_core::topic::{SubTopic, SubTopicList, Topic};
 use feynman_native_utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
+use gemini_adapter::GeminiAdapter;
 use openai_realtime::types::audio::Base64EncodedAudioBytes;
 use ringbuf::traits::{Consumer, Producer, Split};
 use rubato::Resampler;
@@ -59,11 +64,32 @@ async fn main() -> Result<()> {
     tracing::info!("Loaded {} prompts successfully.", prompts.len());
 
     // --- 5. Initialize API Clients ---
-    let reviewer = Arc::new(ReviewerClient::new(
-        config.openai_api_key.clone(),
-        config.chat_model.clone(),
-        prompts,
-    ));
+    let (mut realtime_api, reviewer): (Box<dyn RealtimeApi>, Arc<dyn Reviewer>) =
+        match config.provider {
+            RealtimeProvider::OpenAI => {
+                tracing::info!("Using OpenAI Provider for Realtime and Reviewer");
+                let api_key = config
+                    .openai_api_key
+                    .context("OPENAI_API_KEY must be set for openai provider")?;
+
+                let adapter = OpenAIAdapter::new(api_key.clone()).await?;
+                let reviewer = OpenAIReviewer::new(api_key, config.chat_model.clone(), prompts);
+
+                (Box::new(adapter), Arc::new(reviewer))
+            }
+            RealtimeProvider::Gemini => {
+                tracing::info!("Using Gemini Provider for Realtime and Reviewer");
+                let api_key = config
+                    .gemini_api_key
+                    .context("GEMINI_API_KEY must be set for gemini provider")?;
+
+                let adapter = GeminiAdapter::new(&api_key).await?;
+                // Using the simulated GeminiReviewer for now.
+                let reviewer = GeminiReviewer;
+
+                (Box::new(adapter), Arc::new(reviewer))
+            }
+        };
 
     // --- 6. Application Setup ---
 
@@ -213,14 +239,6 @@ async fn main() -> Result<()> {
     )?;
     // Begin playing the output stream.
     output_stream.play()?;
-
-    // OpenAI Realtime API
-    // Connect to the API via the adapter.
-    let mut realtime_api: Box<dyn RealtimeApi> = Box::new(
-        OpenAIAdapter::new()
-            .await
-            .context("Failed to create OpenAI Adapter")?,
-    );
 
     let topic = Topic {
         main_topic: args.topic,
