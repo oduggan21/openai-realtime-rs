@@ -1,11 +1,18 @@
+use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{FrameCount, StreamConfig};
+use feynman_core::{
+    generic_types::{GenericServerEvent, GenericSessionConfig},
+    realtime_api::RealtimeApi,
+};
+
 use feynman_native_utils::audio::REALTIME_API_PCM16_SAMPLE_RATE;
 use feynman_native_utils::{audio, device};
-use openai_realtime::types::audio::Base64EncodedAudioBytes;
+use feynman_service::{gemini_adapter::GeminiAdapter, openai_adapter::OpenAIAdapter};
 use ringbuf::traits::{Consumer, Producer, Split};
 use rubato::Resampler;
 use std::collections::VecDeque;
+use std::env;
 use tracing::Level;
 use tracing_subscriber::fmt::time::ChronoLocal;
 
@@ -15,16 +22,14 @@ const OUTPUT_LATENCY_MS: usize = 1000;
 
 pub enum Input {
     Audio(Vec<f32>),
-    Initialize(),
-    Initialized(),
-    AISpeaking(),
-    AISpeakingDone(),
+    AISpeaking,
+    AISpeakingDone,
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     // Load environment variables from a .env file.
-    dotenvy::dotenv_override().ok();
+    dotenvy::dotenv().ok();
 
     // Create a tracing subscriber for tracking debug statements with timestamps.
     tracing_subscriber::fmt()
@@ -102,7 +107,6 @@ async fn main() {
         .expect("failed to build input stream");
 
     input_stream.play().expect("failed to play input stream");
-    let _input_channel_count = input_config.channels as usize;
     let input_sample_rate = input_config.sample_rate.0 as f32;
 
     //------------------------------------------------------------/
@@ -177,12 +181,11 @@ async fn main() {
         // Notify the client task when the AI is speaking or has finished.
         let client_ctrl = client_ctrl.clone();
         if silence == (data.len() / output_channel_count) {
-            if let Err(e) = client_ctrl.try_send(Input::AISpeakingDone()) {
+            if let Err(e) = client_ctrl.try_send(Input::AISpeakingDone) {
                 eprintln!("Failed to send speaking done event to client: {:?}", e);
             }
         } else {
-            // println!("speaking..., silence: {:?}, len: {}", silence, data.len());
-            if let Err(e) = client_ctrl.try_send(Input::AISpeaking()) {
+            if let Err(e) = client_ctrl.try_send(Input::AISpeaking) {
                 eprintln!("Failed to send speaking event to client: {:?}", e);
             }
         }
@@ -200,11 +203,23 @@ async fn main() {
     // Begin playing the output stream.
     output_stream.play().expect("failed to play output stream");
 
-    // OpenAI Realtime API
-    // Connect to the OpenAI Realtime API.
-    let mut realtime_api = openai_realtime::connect()
-        .await
-        .expect("failed to connect to OpenAI Realtime API");
+    // --- Realtime API ---
+    let provider = env::var("REALTIME_PROVIDER").unwrap_or_else(|_| "openai".to_string());
+
+    let mut realtime_api: Box<dyn RealtimeApi> = match provider.to_lowercase().as_str() {
+        "gemini" => {
+            println!("Using Gemini Provider");
+            let api_key =
+                env::var("GEMINI_API_KEY").context("GEMINI_API_KEY must be set for gemini")?;
+            Box::new(GeminiAdapter::new(&api_key).await?)
+        }
+        _ => {
+            println!("Using OpenAI Provider");
+            let api_key =
+                env::var("OPENAI_API_KEY").context("OPENAI_API_KEY must be set for openai")?;
+            Box::new(OpenAIAdapter::new(api_key).await?)
+        }
+    };
 
     // Create a resampler to convert the API's audio sample rate to the output device's sample rate.
     let mut out_resampler = audio::create_resampler(
@@ -215,7 +230,7 @@ async fn main() {
     .expect("failed to create resampler for output");
 
     // This channel receives base64 encoded audio from the server events task.
-    let (post_tx, mut post_rx) = tokio::sync::mpsc::channel::<Base64EncodedAudioBytes>(100);
+    let (_post_tx, mut post_rx) = tokio::sync::mpsc::channel::<String>(100);
 
     // This task receives audio from the server, decodes, resamples, and pushes it to the output buffer.
     let post_process = tokio::spawn(async move {
@@ -246,66 +261,32 @@ async fn main() {
     let mut server_events = realtime_api
         .server_events()
         .await
-        .expect("failed to get server events");
+        .context("Failed to get server events channel")?;
+
     let server_handle = tokio::spawn(async move {
         // Receive and process events from the server.
-        while let Ok(e) = server_events.recv().await {
-            // println!("server_events: {:?}", &e);
-            // Match on the event type.
+        while let Some(e) = server_events.recv().await {
             match e {
-                // When the session is created, send an `Initialize` event to the client task.
-                openai_realtime::types::events::ServerEvent::SessionCreated(data) => {
-                    println!("session created: {:?}", data.session());
-                    if let Err(e) = client_ctrl2.try_send(Input::Initialize()) {
-                        eprintln!("Failed to send initialized event to client: {:?}", e);
+                GenericServerEvent::Transcription(text) => {
+                    println!("Human: {}", text.trim());
+                }
+                GenericServerEvent::Speaking => {
+                    if let Err(e) = client_ctrl2.send(Input::AISpeaking).await {
+                        eprintln!("Failed to send speaking event to client: {:?}", e);
                     }
                 }
-                // When the session is updated, send an `Initialized` event.
-                openai_realtime::types::events::ServerEvent::SessionUpdated(data) => {
-                    println!("session updated: {:?}", data.session());
-                    if let Err(e) = client_ctrl2.try_send(Input::Initialized()) {
-                        eprintln!("Failed to send initialized event to client: {:?}", e);
+                GenericServerEvent::SpeakingDone => {
+                    if let Err(e) = client_ctrl2.send(Input::AISpeakingDone).await {
+                        eprintln!("Failed to send speaking done event to client: {:?}", e);
                     }
                 }
-                // openai_realtime::types::events::ServerEvent::ConversationItemCreated(data) => {
-                //     println!("conversation item created: {:?}", data.item());
-                // }
-                openai_realtime::types::events::ServerEvent::InputAudioBufferSpeechStarted(data) => {
-                    println!("speech started: {:?}", data);
+                GenericServerEvent::Error(err) => {
+                    eprintln!("Server Error: {}", err);
                 }
-                openai_realtime::types::events::ServerEvent::InputAudioBufferSpeechStopped(data) => {
-                    println!("speech stopped: {:?}", data);
-                }
-                openai_realtime::types::events::ServerEvent::ConversationItemInputAudioTranscriptionCompleted(data ) => {
-                    println!("Human: {:?}, e:{:?} i:{:?}", data.transcript().trim(), data.event_id(), data.item_id());
-                }
-                // If we receive response audio, send it to the post-processing channel.
-                openai_realtime::types::events::ServerEvent::ResponseAudioDelta(data) => {
-                    if let Err(e) = post_tx.send(data.delta().to_string()).await {
-                        eprintln!("Failed to send audio data to resampler: {:?}", e);
-                    }
-                }
-                // openai_realtime::types::events::ServerEvent::ResponseTextDone(data) => {
-                //     println!("text: {:?}", data.text());
-                // }
-                openai_realtime::types::events::ServerEvent::ResponseCreated(data ) => {
-                    println!("response created: {:?}", data.response());
-                }
-                openai_realtime::types::events::ServerEvent::ResponseAudioTranscriptDone(data) => {
-                    println!("AI: {:?}", data.transcript());
-                }
-                // openai_realtime::types::events::ServerEvent::ResponseAudioDone(data ) => {
-                //     println!("audio done: {:?}", data);
-                // }
-                openai_realtime::types::events::ServerEvent::ResponseDone(data) => {
-                    println!("usage: {:?}", data.response().usage());
-                    println!("output: {:?}", data.response().outputs());
-                }
-                openai_realtime::types::events::ServerEvent::Close { reason } => {
-                    println!("close: {:?}", reason);
+                GenericServerEvent::Closed => {
+                    println!("Connection closed.");
                     break;
                 }
-                _ => {}
             }
         }
     });
@@ -320,63 +301,44 @@ async fn main() {
 
     // This task handles client-side logic: sending user audio and managing state.
     let client_handle = tokio::spawn(async move {
+        // Configure the session once at the start.
+        let session_config = GenericSessionConfig {
+            instructions: "You are a helpful and friendly voice assistant.".to_string(),
+        };
+        realtime_api
+            .update_session(session_config)
+            .await
+            .expect("Failed to initialize session");
+        println!("Session initialized.");
+
         let mut ai_speaking = false;
-        let mut initialized = false;
         let mut buffer: VecDeque<f32> = VecDeque::with_capacity(INPUT_CHUNK_SIZE * 2);
 
         // Receive and process inputs from the audio callbacks and server event handler.
         while let Some(i) = input_rx.recv().await {
             match i {
-                Input::Initialize() => {
-                    // Once a connection has been established, update the session with custom parameters.
-                    println!("initializing...");
-                    let session = openai_realtime::types::Session::new()
-                        .with_modalities_enable_audio()
-                        .with_voice(openai_realtime::types::audio::Voice::Alloy)
-                        .with_input_audio_transcription_enable(
-                            openai_realtime::types::audio::TranscriptionModel::Whisper,
-                        )
-                        .build();
-                    println!(
-                        "session config: {:?}",
-                        serde_json::to_string(&session).unwrap()
-                    );
-                    realtime_api
-                        .update_session(session)
-                        .await
-                        .expect("failed to init session");
-                }
-                Input::Initialized() => {
-                    println!("initialized");
-                    // let config = openai_realtime::types::Session::new()
-                    //     .with_modalities_enable_audio()
-                    //     .with_instructions("Please greeting in Japanese")
-                    //     .build();
-                    // realtime_api.create_response_with_config(config).await.expect("failed to send message");
-                    initialized = true;
-                }
-                Input::AISpeaking() => {
+                Input::AISpeaking => {
                     if !ai_speaking {
                         println!("AI speaking...");
                     }
                     buffer.clear();
                     ai_speaking = true;
                 }
-                Input::AISpeakingDone() => {
+                Input::AISpeakingDone => {
                     if ai_speaking {
                         println!("AI speaking done");
                     }
                     ai_speaking = false;
                 }
                 Input::Audio(audio) => {
-                    if initialized && !ai_speaking {
-                        for sample in audio {
-                            buffer.push_back(sample);
-                        }
+                    if !ai_speaking {
+                        buffer.extend(audio);
                         let mut resampled: Vec<f32> = vec![];
                         while buffer.len() >= INPUT_CHUNK_SIZE {
-                            let audio: Vec<f32> = buffer.drain(..INPUT_CHUNK_SIZE).collect();
-                            if let Ok(resamples) = in_resampler.process(&[audio.as_slice()], None) {
+                            let audio_chunk: Vec<f32> = buffer.drain(..INPUT_CHUNK_SIZE).collect();
+                            if let Ok(resamples) =
+                                in_resampler.process(&[audio_chunk.as_slice()], None)
+                            {
                                 if let Some(resamples) = resamples.first() {
                                     resampled.extend(resamples.iter().cloned());
                                 }
@@ -385,10 +347,9 @@ async fn main() {
                         if resampled.is_empty() {
                             continue;
                         }
-                        let audio_bytes = audio::encode(&resampled);
-                        let audio_bytes = Base64EncodedAudioBytes::from(audio_bytes);
+                        let pcm16_audio = audio::convert_f32_to_i16(&resampled);
                         realtime_api
-                            .append_input_audio_buffer(audio_bytes.clone())
+                            .append_input_audio_buffer(pcm16_audio)
                             .await
                             .expect("failed to send audio");
                     }
@@ -406,4 +367,5 @@ async fn main() {
         }
     }
     println!("Shutting down...");
+    Ok(())
 }
