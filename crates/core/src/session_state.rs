@@ -22,6 +22,7 @@ pub struct QuestionForSubtopic {
 pub enum FeynmanState {
     Listening,
     Analyzing,
+    PendingAsk,
     AnalyzingAnswers,
 }
 
@@ -103,6 +104,9 @@ impl FeynmanSession {
                 // If we are in an analyzing state and a new segment comes in, just buffer it for later.
                 session.in_between_buffer.push(segment);
             }
+            FeynmanState::PendingAsk => {
+                session.in_between_buffer.push(segment);
+            }
             FeynmanState::AnalyzingAnswers => {
                 // A new segment has arrived while we are waiting for an answer.
                 // We treat this as the answer (or part of it).
@@ -160,6 +164,7 @@ impl FeynmanSession {
                 let detected_subtopics: Vec<SubTopic> =
                     detected_subtopics.into_iter().cloned().collect();
                 // Analyze the topic for correctness using the reviewer.
+                tracing::info!( subtopics = ?detected_subtopics, "Beginning topic analysis for segment");
                 let analysis_json = reviewer
                     .analyze_topic(&combined, &detected_subtopics)
                     .await
@@ -248,7 +253,7 @@ impl FeynmanSession {
                             .context("Failed to send SpeakText command")?;
 
                         // After commanding the runtime to ask, we wait for the answer.
-                        session.state = FeynmanState::AnalyzingAnswers;
+                        session.state = FeynmanState::PendingAsk
                     } else {
                         // This case should not be reached if the queue is not empty, but as a safeguard:
                         session.state = FeynmanState::Listening;
@@ -342,7 +347,7 @@ impl FeynmanSession {
                 .await
                 .context("Failed to send next SpeakText command")?;
             // The state remains AnalyzingAnswers, as we are now waiting for the next answer.
-            self.state = FeynmanState::AnalyzingAnswers;
+            self.state = FeynmanState::PendingAsk;
         } else {
             // All questions for this batch have been asked.
             self.question_queue.clear();
@@ -403,9 +408,15 @@ impl FeynmanSession {
     fn is_session_complete(&self) -> bool {
         self.covered_subtopics.len() == self.subtopic_list.subtopics.len()
     }
-     pub fn on_ai_speaking(&mut self, speaking: bool) {
-        self.ai_speaking = speaking; // add `ai_speaking: bool` field to the struct
+    pub fn on_ai_speaking(&mut self, speaking: bool) {
+    let was = self.ai_speaking;
+    self.ai_speaking = speaking;
+
+    // true -> false edge AND we were waiting to ask
+    if was && !speaking && matches!(self.state, FeynmanState::PendingAsk) {
+        self.state = FeynmanState::AnalyzingAnswers;
     }
+}
 }
 
 #[cfg(test)]
@@ -488,4 +499,96 @@ mod tests {
         assert_eq!(question.field, "has_definition");
         assert_eq!(question.question, "What is TCP/IP?");
     }
+
+    #[tokio::test]
+async fn process_segment_enters_pendingask_instead_of_analyzinganswers() {
+    // Arrange
+    let mut mock_reviewer = MockReviewer::new();
+    mock_reviewer
+        .expect_analyze_topic()
+        .returning(|_, _| {
+            let json_response = r#"[
+                {
+                    "subtopic": "TCP/IP",
+                    "has_definition": false,
+                    "has_mechanism": false,
+                    "has_example": false,
+                    "questions": [
+                        { "field": "has_definition", "question": "What is TCP/IP?" }
+                    ]
+                }
+            ]"#;
+            Box::pin(async move { Ok(json_response.to_string()) })
+        })
+        .once();
+
+    let subtopics = vec![SubTopic::new("TCP/IP".to_string())];
+    let subtopic_list = SubTopicList::new(subtopics);
+
+    let mut session = FeynmanSession::new(subtopic_list);
+    let (command_tx, mut command_rx) = tokio::sync::mpsc::channel(1);
+
+    // Act
+    FeynmanSession::process_segment(
+        &mut session,
+        &mock_reviewer,
+        "Let's talk about TCP/IP.".to_string(),
+        command_tx,
+    ).await;
+
+    // Assert: we should now be waiting for AI to speak (PendingAsk), not analyzing answers yet
+    assert_eq!(session.state, FeynmanState::PendingAsk, "Should be PendingAsk after issuing SpeakText");
+
+    // And the SpeakText command was sent
+    match command_rx.try_recv().expect("expected a SpeakText command") {
+        Command::SpeakText(t) => assert_eq!(t, "What is TCP/IP?"),
+        _ => panic!("expected SpeakText"),
+    }
+}
+
+#[tokio::test]
+async fn pendingask_transitions_to_analyzinganswers_when_ai_finishes() {
+    // Arrange: same setup returning one question
+    let mut mock_reviewer = MockReviewer::new();
+    mock_reviewer
+        .expect_analyze_topic()
+        .returning(|_, _| {
+            let json_response = r#"[
+                {
+                    "subtopic": "TCP/IP",
+                    "has_definition": false,
+                    "has_mechanism": false,
+                    "has_example": false,
+                    "questions": [
+                        { "field": "has_definition", "question": "What is TCP/IP?" }
+                    ]
+                }
+            ]"#;
+            Box::pin(async move { Ok(json_response.to_string()) })
+        })
+        .once();
+
+    let subtopics = vec![SubTopic::new("TCP/IP".to_string())];
+    let subtopic_list = SubTopicList::new(subtopics);
+
+    let mut session = FeynmanSession::new(subtopic_list);
+    let (command_tx, _command_rx) = tokio::sync::mpsc::channel(1);
+
+    // Drive to PendingAsk
+    FeynmanSession::process_segment(
+        &mut session,
+        &mock_reviewer,
+        "TCP/IP basics".to_string(),
+        command_tx,
+    ).await;
+    assert_eq!(session.state, FeynmanState::PendingAsk);
+
+    // Simulate AI starting to speak, then finishing (true -> false edge)
+    session.on_ai_speaking(true);
+    assert_eq!(session.state, FeynmanState::PendingAsk, "Should stay PendingAsk while speaking");
+
+    session.on_ai_speaking(false);
+    assert_eq!(session.state, FeynmanState::AnalyzingAnswers, "Should enter AnalyzingAnswers only after speaking ends");
+}
+
 }
