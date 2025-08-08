@@ -1,3 +1,5 @@
+pub mod generic_types;
+pub mod realtime_api;
 pub mod reviewer;
 pub mod session_state;
 pub mod topic;
@@ -10,7 +12,6 @@ pub mod topic;
 pub enum Command {
     /// Command the runtime to speak the given text to the user.
     SpeakText(String),
-    /// Command indicating the session (or a phase of it) is complete.
-    /// Includes a final message for the user.
+    /// Command indicating the session is complete, with a final message.
     SessionComplete(String),
 }
