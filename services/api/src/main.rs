@@ -1,7 +1,7 @@
 mod config;
 
-use crate::config::Config;
-use anyhow::{Context, Result};
+use crate::config::{Config, Provider};
+use anyhow::{Context, Result, anyhow};
 use axum::{
     Router,
     extract::{
@@ -13,6 +13,7 @@ use axum::{
 };
 use feynman_core::{
     agent::{FeynmanAgent, FeynmanService},
+    gemini_reviewer::GeminiReviewer,
     reviewer::{OpenAIReviewer, Reviewer},
     topic::{SubTopic, SubTopicList},
 };
@@ -35,6 +36,8 @@ pub struct AppState {
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type")]
 enum ClientMessage {
+    #[serde(rename = "init")]
+    Init { topic: String },
     #[serde(rename = "user_message")]
     UserMessage { text: String },
 }
@@ -43,6 +46,11 @@ enum ClientMessage {
 #[derive(Serialize, Debug)]
 #[serde(tag = "type")]
 enum ServerMessage {
+    #[serde(rename = "initialized")]
+    Initialized {
+        main_topic: String,
+        subtopics: Vec<String>,
+    },
     #[serde(rename = "agent_response")]
     AgentResponse { text: String },
     #[serde(rename = "error")]
@@ -52,7 +60,6 @@ enum ServerMessage {
 // --- WebSocket Handlers ---
 
 /// Handles WebSocket upgrade requests.
-/// This function is the entry point for WebSocket connections.
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> Response {
     info!("WebSocket upgrade request received");
     ws.on_upgrade(|socket| handle_socket(socket, state))
@@ -61,10 +68,9 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) ->
 /// Manages an individual WebSocket connection and its dedicated agent session.
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     info!("New WebSocket connection established. Initializing agent session...");
-
-    // Spawn a dedicated task for this client's agent session.
     tokio::spawn(async move {
         if let Err(e) = run_agent_session(socket, state).await {
+            // Using `?` formatting for detailed error logging.
             error!("Agent session failed: {:?}", e);
         }
         info!("Agent session task finished.");
@@ -73,26 +79,38 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
 /// The core logic for a single user session.
 async fn run_agent_session(mut socket: WebSocket, state: Arc<AppState>) -> Result<()> {
-    // --- 1. Agent Initialization ---
-    // Use the shared reviewer instance from the application state.
-    let reviewer = state.reviewer.clone();
+    // --- Phase 1: Initialization ---
+    // The first message from the client MUST be an 'init' message with the topic.
+    let topic = match socket.recv().await {
+        Some(Ok(Message::Text(text))) => match serde_json::from_str::<ClientMessage>(&text) {
+            Ok(ClientMessage::Init { topic }) => {
+                info!("Initializing session for topic: '{}'", topic);
+                topic
+            }
+            _ => return Err(anyhow!("First message was not a valid 'init' message.")),
+        },
+        _ => return Err(anyhow!("Client disconnected before sending init message.")),
+    };
 
-    // For this web service, we'll hardcode the topic.
-    let main_topic = "The Feynman Technique".to_string();
-    let subtopic_names = reviewer.generate_subtopics(&main_topic).await?;
-    let subtopics: Vec<SubTopic> = subtopic_names.into_iter().map(SubTopic::new).collect();
+    // --- 2. Agent Initialization ---
+    let reviewer = state.reviewer.clone();
+    let subtopic_names = reviewer.generate_subtopics(&topic).await?;
+    // Use `into_iter` to pass owned `String`s to `SubTopic::new`.
+    let subtopics: Vec<SubTopic> = subtopic_names
+        .clone()
+        .into_iter()
+        .map(SubTopic::new)
+        .collect();
     let subtopic_list = SubTopicList::new(subtopics);
 
     let agent_state = Arc::new(tokio::sync::Mutex::new(FeynmanAgent::new(
-        main_topic,
+        topic.clone(),
         subtopic_list,
     )));
     let feynman_service = FeynmanService::new(agent_state, reviewer);
 
-    // --- 2. MCP Transport Setup ---
+    // --- 3. MCP Transport Setup ---
     let (client_io, server_io) = tokio::io::duplex(4096);
-
-    // Spawn the agent's main service loop in a separate task.
     let agent_handle = tokio::spawn(async move {
         info!("Starting FeynmanService for new client.");
         if let Err(e) = feynman_service.serve(server_io).await {
@@ -100,11 +118,18 @@ async fn run_agent_session(mut socket: WebSocket, state: Arc<AppState>) -> Resul
         }
         info!("FeynmanService for client has shut down.");
     });
-
     let mcp_client = ().serve(client_io).await?;
     info!("Agent session initialized successfully. Ready for messages.");
 
-    // --- 3. Bidirectional Communication Loop ---
+    // --- 4. Signal to client that we are ready ---
+    let ready_msg = ServerMessage::Initialized {
+        main_topic: topic,
+        subtopics: subtopic_names,
+    };
+    let payload = serde_json::to_string(&ready_msg)?;
+    socket.send(Message::Text(payload.into())).await?;
+
+    // --- 5. Bidirectional Communication Loop ---
     while let Some(msg_result) = socket.recv().await {
         match msg_result {
             Ok(Message::Text(text)) => {
@@ -167,6 +192,10 @@ async fn run_agent_session(mut socket: WebSocket, state: Arc<AppState>) -> Resul
                         let payload = serde_json::to_string(&server_msg)?;
                         socket.send(Message::Text(payload.into())).await?;
                     }
+                    ClientMessage::Init { .. } => {
+                        warn!("Client sent 'init' message after session was already initialized.");
+                        // Optionally send an error message back to the client.
+                    }
                 }
             }
             Ok(Message::Close(_)) => {
@@ -181,7 +210,7 @@ async fn run_agent_session(mut socket: WebSocket, state: Arc<AppState>) -> Resul
         }
     }
 
-    // --- 4. Graceful Shutdown ---
+    // --- 6. Graceful Shutdown ---
     agent_handle.abort();
     info!("WebSocket connection closed and agent session terminated.");
     Ok(())
@@ -211,11 +240,23 @@ async fn main() -> anyhow::Result<()> {
     // --- 3. Initialize Shared State ---
     let prompts = feynman_service::prompt_loader::load_prompts(Path::new("prompts"))
         .context("Failed to load LLM prompts from './prompts' directory")?;
-    let reviewer = Arc::new(OpenAIReviewer::new(
-        config.openai_api_key,
-        config.chat_model,
-        prompts,
-    ));
+
+    let reviewer: Arc<dyn Reviewer> = match config.provider {
+        Provider::OpenAI => {
+            info!("Using OpenAI provider for Reviewer service.");
+            Arc::new(OpenAIReviewer::new(
+                config.openai_api_key.unwrap(), // Safe due to check in Config
+                config.chat_model,
+                prompts,
+            ))
+        }
+        Provider::Gemini => {
+            info!("Using Gemini provider for Reviewer service.");
+            // The GeminiReviewer is a mock/placeholder for now.
+            Arc::new(GeminiReviewer)
+        }
+    };
+
     let app_state = Arc::new(AppState { reviewer });
 
     // --- 4. Configure Server ---
