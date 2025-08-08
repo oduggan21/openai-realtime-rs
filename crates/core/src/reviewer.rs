@@ -38,7 +38,7 @@ pub struct Message {
 // a mock implementation of this trait, but only when compiling for tests.
 #[async_trait]
 #[cfg_attr(test, automock)]
-pub trait Reviewer {
+pub trait Reviewer: Send + Sync {
     async fn looks_like_topic_change(
         &self,
         context_buffer: &str,
@@ -62,7 +62,7 @@ pub trait Reviewer {
     async fn analyze_answer(&self, question: &str, answer: &str) -> Result<bool>;
 }
 
-pub struct ReviewerClient {
+pub struct OpenAIReviewer {
     client: Client,
     api_key: String,
     model: String,
@@ -75,7 +75,7 @@ pub struct AnalysisOut {
     pub questions: Vec<String>, // 0..=2
 }
 
-impl ReviewerClient {
+impl OpenAIReviewer {
     pub fn new(api_key: String, model: String, prompts: HashMap<String, String>) -> Self {
         Self {
             client: Client::new(),
@@ -86,13 +86,13 @@ impl ReviewerClient {
     }
 }
 
-// This block implements the `Reviewer` trait for the `ReviewerClient`.
+// This block implements the `Reviewer` trait for the `OpenAIReviewer`.
 // It contains the actual logic for making calls to the OpenAI API.
 // By separating the implementation from the `FeynmanSession`, we can easily
 // swap this out with other implementations in the future (e.g., a client for
 // a different LLM provider) without changing any of the core application logic.
 #[async_trait]
-impl Reviewer for ReviewerClient {
+impl Reviewer for OpenAIReviewer {
     async fn looks_like_topic_change(
         &self,
         context_buffer: &str,
@@ -406,7 +406,7 @@ mod tests {
         // For testing, we create a dummy prompt map. In a real scenario, this would be loaded.
         let mut prompts = HashMap::new();
         prompts.insert("generate_subtopics".to_string(), "List all the key subtopics and concepts someone should cover to thoroughly teach the topic \"{topic}\" to a beginner. Respond ONLY as a numbered list of subtopic names (no explanations).".to_string());
-        let reviewer = ReviewerClient::new(api_key, model, prompts);
+        let reviewer = OpenAIReviewer::new(api_key, model, prompts);
 
         // Try generating subtopics for "Operating Systems"
         let topic = "Operating Systems";
@@ -459,7 +459,7 @@ mod tests {
         {segment}
         ---
     "#.to_string());
-        let reviewer = ReviewerClient::new(api_key, model, prompts);
+        let reviewer = OpenAIReviewer::new(api_key, model, prompts);
 
         // Prepare a simple segment and subtopics
         let segment =
@@ -555,7 +555,7 @@ Respond STRICTLY as JSON:
 Do NOT add any explanation, just the JSON."#
                 .to_string(),
         );
-        let reviewer = ReviewerClient::new(api_key, model, prompts);
+        let reviewer = OpenAIReviewer::new(api_key, model, prompts);
 
         // Test case 1: Correct and complete answer
         let question = "What is TCP/IP?";
