@@ -5,7 +5,7 @@ mod client;
 
 pub use openai_realtime_types as types;
 
-pub use client::{Client, ServerRx, connect};
+pub use client::{Client, ServerRx, config, connect, connect_with_config};
 pub use types::{Item, Session};
 
 /// A trait that abstracts the `openai_realtime::Client` to allow for mocking in tests.
