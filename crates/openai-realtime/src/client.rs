@@ -8,7 +8,7 @@ use tokio_tungstenite::tungstenite::Message;
 // Add this use statement
 use anyhow::Result;
 
-mod config;
+pub mod config;
 mod consts;
 mod stats;
 mod utils;
